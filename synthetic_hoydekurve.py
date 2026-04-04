@@ -3,9 +3,6 @@ import geopandas as gpd
 import shapely.geometry as geom
 from scipy.spatial import Delaunay
 from shapely.ops import unary_union
-from scipy.interpolate import griddata
-import rasterio
-from rasterio.transform import from_origin
 import os
 
 # ---- parametrer ----
@@ -14,12 +11,16 @@ crs = "EPSG:25833"
 seed = 42
 np.random.seed(seed)
 
-h_min, h_max = 70.0, 140.0
-n_primary = 35
-sec_per_tri = 5
-ter_per_tri = 5
-sec_delta = 3.0
-ter_delta = 1.2
+h_min, h_max = 80.0, 130.0
+n_primary = 15
+sec_per_tri = 3
+ter_per_tri = 3
+qua_per_tri = 3
+qui_per_tri = 3
+sec_delta = 2.0
+ter_delta = 1.0
+qua_delta = 0.5
+qui_delta = 0.2
 ekvidistanse = 1.0
 raster_res = 1.0
 
@@ -56,6 +57,28 @@ def add_level_points(points, tris, per_tri, delta):
             added.append((x, y, z))
     return added
 
+def generate_contours_from_tin(points, triangles, levels):
+    contours = []
+    for level in levels:
+        lines = []
+        for tri in triangles:
+            p0, p1, p2 = points[tri[0]], points[tri[1]], points[tri[2]]
+            h0, h1, h2 = p0[2], p1[2], p2[2]
+            edges = [(p0, p1, h0, h1), (p1, p2, h1, h2), (p2, p0, h2, h0)]
+            intersections = []
+            for pa, pb, ha, hb in edges:
+                if (ha <= level <= hb) or (hb <= level <= ha):
+                    if ha != hb:
+                        t = (level - ha) / (hb - ha)
+                        x = pa[0] + t * (pb[0] - pa[0])
+                        y = pa[1] + t * (pb[1] - pa[1])
+                        intersections.append((x, y))
+            if len(intersections) == 2:
+                lines.append(geom.LineString(intersections))
+        for line in lines:
+            contours.append({"geometry": line, "hoyde": float(level)})
+    return contours
+
 # 1) primærpunkter
 px = np.random.uniform(minx+20, maxx-20, n_primary)
 py = np.random.uniform(miny+20, maxy-20, n_primary)
@@ -77,31 +100,31 @@ level2 = np.vstack([level1, np.array(ter)]) if len(ter) else level1
 # 5) TIN nivå 2
 tri2 = Delaunay(level2[:, :2])
 
-# 6) Lag alle-punkter og 4. TIN for nivå 3 (kan hoppe hvis ikke nødvendig)
-all_points = level2
-tri3 = Delaunay(all_points[:, :2])
+# 6) kvaternære punkter
+qua = add_level_points(level2, tri2.simplices, qua_per_tri, qua_delta)
+level3 = np.vstack([level2, np.array(qua)]) if len(qua) else level2
 
-# 7) Rasteriser via griddata for kurvegenerering
-xi = np.arange(minx, maxx+raster_res, raster_res)
-yi = np.arange(miny, maxy+raster_res, raster_res)
-xx, yy = np.meshgrid(xi, yi)
-zz = griddata(all_points[:, :2], all_points[:, 2], (xx, yy), method="cubic", fill_value=h_min)
+# 7) TIN nivå 3
+tri3 = Delaunay(level3[:, :2])
 
-# 8) 1-m kurver via matplotlib
-import matplotlib.pyplot as plt
-cs = plt.contour(xx, yy, zz, levels=np.arange(h_min, h_max+ekvidistanse, ekvidistanse))
-lines = []
-for level, collection in zip(cs.levels, cs.collections):
-    for path in collection.get_paths():
-        verts = path.vertices
-        if len(verts) < 2:
-            continue
-        lines.append({"geometry": geom.LineString([(x,y) for x,y in verts]), "hoyde": float(level)})
-plt.close()
+# 8) kvaternære -> kvintære
+qui = add_level_points(level3, tri3.simplices, qui_per_tri, qui_delta)
+level4 = np.vstack([level3, np.array(qui)]) if len(qui) else level3
 
-# 9) GeoDataFrames
+# 9) TIN nivå 4
+tri4 = Delaunay(level4[:, :2])
+
+# 10) Lag alle-punkter og 5. TIN for nivå 5
+all_points = level4
+tri5 = Delaunay(all_points[:, :2])
+
+# 11) Generer høydekurver direkte fra TIN (vektor-domene)
+levels = np.arange(h_min, h_max + ekvidistanse, ekvidistanse)
+lines = generate_contours_from_tin(all_points, tri5.simplices, levels)
+
+# 12) GeoDataFrames
 gdf_pts = gpd.GeoDataFrame(all_points, columns=["x","y","hoyde"], geometry=[geom.Point(x,y) for x,y,_ in all_points], crs=crs)
-gdf_tin = gpd.GeoDataFrame([{"geometry": geom.Polygon(all_points[s][:, :2]), "level":"all"} for s in tri3.simplices], crs=crs)
+gdf_tin = gpd.GeoDataFrame([{"geometry": geom.Polygon(all_points[s][:, :2]), "level":"all"} for s in tri5.simplices], crs=crs)
 gdf_contours = gpd.GeoDataFrame(lines, crs=crs)
 
 # 10) Skrive til GeoPackage
