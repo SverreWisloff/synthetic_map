@@ -1,69 +1,77 @@
-# Synthetic Map - Terrain Generation
+# Syntetisk Kart - Terrenggenerering
 
-A Python script that generates synthetic terrain data using Delaunay triangulation and contour line generation.
+Et Python-skript som genererer syntetiske terrengdata ved hjelp av Delaunay-triangulering og vektor-basert konturlinje-generering.
 
-## Features
+## Funksjoner
 
-- Generates synthetic terrain points with multiple levels of detail (primary, secondary, tertiary)
-- Creates TIN (Triangulated Irregular Network) mesh representation
-- Generates equidistant contour lines at 1-meter intervals
-- Outputs results to GeoPackage format for GIS applications
+- Genererer syntetiske terrengpunkter med flere detaljnivåer (primær, sekundær, tertiær, kvaternær, kvintær)
+- Lager TIN (Triangulert irregulær nettverk) mesh-representasjon
+- Genererer ekvidistante konturlinjer på 1-meter intervaller direkte fra TIN (vektor-domene)
+- Utskrift av resultater til GeoPackage-format for GIS-applikasjoner
 
-## Requirements
+## Krav
 
 - Python 3.9+
-- Dependencies listed in `requirements.txt`
+- Avhengigheter listet i `requirements.txt`
 
-## Installation
+## Installasjon
 
-1. Clone this repository:
+1. Klon dette repositoriet:
 ```bash
-git clone https://github.com/yourusername/synthetic_map.git
+git clone https://github.com/SverreWisloff/synthetic_map.git
 cd synthetic_map
 ```
 
-2. Create a virtual environment:
+2. Lag et virtuelt miljø:
 ```bash
 python -m venv .venv
-source .venv/bin/activate  # On macOS/Linux
-# or
-.venv\Scripts\activate  # On Windows
+source .venv/bin/activate  # På macOS/Linux
+# eller
+.venv\Scripts\activate  # På Windows
 ```
 
-3. Install dependencies:
+3. Installer avhengigheter:
 ```bash
 pip install -r requirements.txt
 ```
 
-## Usage
+## Bruk
 
-Run the script to generate synthetic terrain:
+Kjør skriptet for å generere syntetisk terreng:
 ```bash
 python synthetic_hoydekurve.py
 ```
 
-This will create `synthetic_hoydekurve.gpkg` containing:
-- `terrain_points`: Generated elevation points
-- `terrain_tin`: Triangulated irregular network
-- `hoydekurver_1m`: 1-meter equidistant contour lines
+Dette vil lage `synthetic_hoydekurve.gpkg` som inneholder:
+- `terrain_points`: Genererte høydepunkter
+- `terrain_tin`: Triangulert irregulært nettverk
+- `hoydekurver_1m`: 1-meter ekvidistante konturlinjer
 
-## Configuration
+## Konfigurasjon
 
-Edit the parameters at the top of `synthetic_hoydekurve.py`:
-- `minx, miny, maxx, maxy`: Bounding box coordinates
-- `crs`: Coordinate Reference System (default: EPSG:25833)
-- `h_min, h_max`: Height range (70-140 meters)
-- `n_primary`: Number of primary elevation points
-- `sec_per_tri`, `ter_per_tri`: Secondary and tertiary points per triangle
-- `ekvidistanse`: Contour line interval (default: 1 meter)
+Rediger parametrene øverst i `synthetic_hoydekurve.py`:
+- `minx, miny, maxx, maxy`: UTM-koordinater for området (påvirker størrelsen på kartet)
+- `crs`: Koordinatsystem (standard: EPSG:25833, UTM sone 33N for Norge)
+- `seed`: Tilfeldig seed for reproduserbarhet
+- `h_min, h_max`: Minimum og maksimum høyde for terrenget (definerer høydeområdet for punkter og kurver)
+- `n_primary`: Antall primære punkter (jo flere, jo mer detaljert og jevn basis-TIN)
+- `sec_per_tri`: Antall sekundære punkter per trekant i nivå 1 (øker tetthet og detalj på første nivå)
+- `ter_per_tri`: Antall tertiære punkter per trekant i nivå 2 (videre økning i tetthet)
+- `qua_per_tri`: Antall kvaternære punkter per trekant i nivå 3 (enda mer detalj)
+- `qui_per_tri`: Antall kvintære punkter per trekant i nivå 4 (fineste nivå for høy oppløsning)
+- `sec_delta`: Standardavvik for høydevariasjon i sekundære punkter (større verdi gir mer terrengvariasjon)
+- `ter_delta`: Standardavvik for tertiære punkter (mindre variasjon enn sekundære)
+- `qua_delta`: Standardavvik for kvaternære punkter (finjustering av detaljer)
+- `qui_delta`: Standardavvik for kvintære punkter (minimal variasjon for glatt terreng)
+- `ekvidistanse`: Avstand mellom høydekurver (standard: 1 meter)
 
 ## Output
 
-The script generates a GeoPackage file with statistics printed to console:
-- Number of terrain points
-- Number of TIN triangles
-- Number of contour lines
+Skriptet genererer en GeoPackage-fil med statistikk skrevet til konsollen:
+- Antall terrengpunkter
+- Antall TIN-trekant
+- Antall konturlinjer
 
-## License
+## Lisens
 
 MIT
