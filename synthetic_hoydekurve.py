@@ -2,35 +2,29 @@ import numpy as np
 import geopandas as gpd
 import shapely.geometry as geom
 from scipy.spatial import Delaunay
-from shapely.ops import unary_union
 import os
 
 # ---- parametrer ----
-minx, miny, maxx, maxy = 500000, 6700000, 501000, 6701000
-crs = "EPSG:25833"
-seed = 42
+minx, miny, maxx, maxy = 500000, 6700000, 501000, 6701000  # UTM-koordinater for området (påvirker størrelsen på kartet)
+crs = "EPSG:25833"  # Koordinatsystem (UTM zone 33N for Norge)
+seed = 42  # Tilfeldig seed for reproduserbarhet
 np.random.seed(seed)
 
-h_min, h_max = 80.0, 130.0
-n_primary = 15
-sec_per_tri = 3
-ter_per_tri = 3
-qua_per_tri = 3
-qui_per_tri = 3
-sec_delta = 2.0
-ter_delta = 1.0
-qua_delta = 0.5
-qui_delta = 0.2
-ekvidistanse = 1.0
-raster_res = 1.0
+h_min, h_max = 80.0, 130.0  # Minimum og maksimum høyde for terrenget (definerer høydeområdet for punkter og kurver)
+n_primary = 15  # Antall primære punkter (jo flere, jo mer detaljert og jevn basis-TIN)
+sec_per_tri = 3  # Antall sekundære punkter per trekant i nivå 1 (øker tetthet og detalj på første nivå)
+ter_per_tri = 3  # Antall tertiære punkter per trekant i nivå 2 (videre økning i tetthet)
+qua_per_tri = 3  # Antall kvaternære punkter per trekant i nivå 3 (enda mer detalj)
+qui_per_tri = 3  # Antall kvintære punkter per trekant i nivå 4 (fineste nivå for høy oppløsning)
+sec_delta = 2.0  # Standardavvik for høydevariasjon i sekundære punkter (større verdi gir mer terrengvariasjon)
+ter_delta = 1.0  # Standardavvik for tertiære punkter (mindre variasjon enn sekundære)
+qua_delta = 0.5  # Standardavvik for kvaternære punkter (finjustering av detaljer)
+qui_delta = 0.2  # Standardavvik for kvintære punkter (minimal variasjon for glatt terreng)
+ekvidistanse = 1.0  # Avstand mellom høydekurver (1 meter ekvidistanse)
 
 out_gpkg = "synthetic_hoydekurve.gpkg"
 
 # tilleggsfunksjoner
-def in_triangle(pt, tri):
-    p = geom.Point(pt)
-    return p.within(geom.Polygon(tri))
-
 def points_in_triangle(a, b, c, n):
     pts = []
     for _ in range(n):
