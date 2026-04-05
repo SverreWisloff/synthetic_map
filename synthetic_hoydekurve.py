@@ -5,21 +5,21 @@ from scipy.spatial import Delaunay
 import os
 
 # ---- parametrer ----
-minx, miny, maxx, maxy = 500000, 6700000, 501000, 6701000  # UTM-koordinater for området (påvirker størrelsen på kartet)
+minx, miny, maxx, maxy = 500000, 6700000, 502000, 6702000  # UTM-koordinater for området (påvirker størrelsen på kartet)
 crs = "EPSG:25833"  # Koordinatsystem (UTM zone 33N for Norge)
 seed = 42  # Tilfeldig seed for reproduserbarhet
 np.random.seed(seed)
 
-h_min, h_max = 80.0, 130.0  # Minimum og maksimum høyde for terrenget (definerer høydeområdet for punkter og kurver)
+h_min, h_max = 100.0, 130.0  # Minimum og maksimum høyde for terrenget (definerer høydeområdet for punkter og kurver)
 n_primary = 15  # Antall primære punkter (jo flere, jo mer detaljert og jevn basis-TIN)
-sec_per_tri = 3  # Antall sekundære punkter per trekant i nivå 1 (øker tetthet og detalj på første nivå)
+sec_per_tri = 5  # Antall sekundære punkter per trekant i nivå 1 (øker tetthet og detalj på første nivå)
 ter_per_tri = 3  # Antall tertiære punkter per trekant i nivå 2 (videre økning i tetthet)
 qua_per_tri = 3  # Antall kvaternære punkter per trekant i nivå 3 (enda mer detalj)
 qui_per_tri = 3  # Antall kvintære punkter per trekant i nivå 4 (fineste nivå for høy oppløsning)
-sec_delta = 2.0  # Standardavvik for høydevariasjon i sekundære punkter (større verdi gir mer terrengvariasjon)
+sec_delta = 3.0  # Standardavvik for høydevariasjon i sekundære punkter (større verdi gir mer terrengvariasjon)
 ter_delta = 1.0  # Standardavvik for tertiære punkter (mindre variasjon enn sekundære)
-qua_delta = 0.5  # Standardavvik for kvaternære punkter (finjustering av detaljer)
-qui_delta = 0.2  # Standardavvik for kvintære punkter (minimal variasjon for glatt terreng)
+qua_delta = 0.4  # Standardavvik for kvaternære punkter (finjustering av detaljer)
+qui_delta = 0.1  # Standardavvik for kvintære punkter (minimal variasjon for glatt terreng)
 ekvidistanse = 1.0  # Avstand mellom høydekurver (1 meter ekvidistanse)
 
 out_gpkg = "synthetic_hoydekurve.gpkg"
