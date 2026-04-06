@@ -1,25 +1,34 @@
-# Syntetisk Kart - Terrenggenerering
+# Syntetisk Kartgenerering
 
-Et Python-skript som genererer syntetiske kartlar (terreng, høydekurver, vegnett) til GeoPackage-format.
+Et Python-skript som genererer syntetiske kartlag (terreng, høydekurver, vegnett) til GeoPackage-format.
 
 ## Arkitektur
 
-Prosjektet er organisert i moduler for fleksibel og utvidbar kartgenerering:
-- `synthetic_map.py` - Hovedprogram og orkestrering
+Prosjektet er organisert i moduler:
+- `synthetic_map.py` - Hovedprogram
 - `synthetic_hoydekurve_module.py` - Terreng- og høydekurvegenerering
 - `synthetic_vegnett_module.py` - Vegnettsenerering
 - `synthetic_hoydekurve.py` - Legacy-versjon (kan slettes)
 
 ## Funksjoner
 
-- Genererer syntetiske terrengpunkter med flere detaljnivåer (primær, sekundær, tertiær, kvaternær, kvintær)
-- Lager TIN (Triangulert irregulær nettverk) mesh-representasjon
-- Genererer ekvidistante konturlinjer på 1-meter intervaller direkte fra TIN (vektor-domene)
-- **Modulell kartlagsgenerering** - velg hvilke lag som skal genereres
-- Genererer to riksveger gjennom området med tangent-kontinuerlige buesegmenter
-- Hovedriksveg går fra sørvest til nordøst
-- Sekundærveg starter ved 25% av hovedvegen og går til nordvest-hjørnet
-- Hvert point i veilinjen får høyde interpolert fra TIN-modellen
+### Terreng
+
+- Genererer syntetiske terrengpunkter med flere detaljnivåer
+- Lager en TIN (Triangulert irregulær nettverk) mesh for terrengmodellering
+- Genererer ekvidistante konturlinjer på 1-meter intervaller fra TIN
+- Skriver terrengpunkter, TIN og konturlinjer til GeoPackage
+
+### Veg
+
+- Genererer en riksveg og en sekundær riksveg gjennom området
+- Vegene består av tangent-kontinuerlige segmenter med jevne kurver
+- Vegnettet får høyde interpolert fra terrengmodellen
+- Skriver vegnett til en egen GeoPackage
+
+### Generelt
+
+- Modulær kartlagsgenerering: velg hvilke lag som skal genereres
 - Output skrives til GeoPackage-format for GIS-applikasjoner
 
 ## Krav
