@@ -183,6 +183,118 @@ def create_kommunalveg(all_points, triangles, bbox, segment_length_min=50.0, seg
     )
 
 
+def generate_private_avkjorsler(kommunale_veger, all_points, triangles, bbox,
+                                all_roads=None,
+                                avstand_fra_ende=50.0, avstand_min=50.0, avstand_max=100.0,
+                                lengde_min=10.0, lengde_max=50.0):
+    """
+    Generer private avkjørsler (korte stikkveger) fra kommunale veger.
+
+    Hver avkjørsel er en 2-punkts linje, normalt (90°) på den kommunale vegen,
+    med tilfeldig lengde og tilfeldig side (venstre/høyre).
+    Avkjørsler som krysser andre veger forkastes.
+
+    Args:
+        kommunale_veger: liste av road-dicts med "geometry"
+        all_points: terrengpunkter for høydeinterpolasjon
+        triangles: TIN-triangler
+        bbox: (minx, miny, maxx, maxy)
+        all_roads: liste av alle road-dicts for krysningssjekk
+        avstand_fra_ende: minimumsavstand fra vegendene (meter)
+        avstand_min: minimumsavstand mellom avkjørsler (meter)
+        avstand_max: maksimumsavstand mellom avkjørsler (meter)
+        lengde_min: minimum avkjørsellengde (meter)
+        lengde_max: maksimum avkjørsellengde (meter)
+
+    Returns:
+        list of road-dicts
+    """
+    from shapely.geometry import box as shp_box
+    from shapely.ops import unary_union
+    minx, miny, maxx, maxy = bbox
+    area_poly = shp_box(minx, miny, maxx, maxy)
+
+    # Samle alle andre veggeometrier for krysningssjekk
+    other_road_lines = []
+    if all_roads:
+        for r in all_roads:
+            other_road_lines.append(r["geometry"])
+    else:
+        for v in kommunale_veger:
+            other_road_lines.append(v["geometry"])
+    other_roads_union = unary_union(other_road_lines)
+
+    avkjorsler = []
+    nummer = 0
+
+    for veg in kommunale_veger:
+        line = veg["geometry"]
+        road_length = line.length
+        veg_navn = veg.get("veg_navn", "")
+
+        distance_along = avstand_fra_ende
+        end_limit = road_length - avstand_fra_ende
+
+        while distance_along < end_limit:
+            point_on_road = line.interpolate(distance_along)
+
+            # Beregn tangentretning
+            eps = 1.0
+            d_fwd = min(distance_along + eps, road_length)
+            d_bwd = max(distance_along - eps, 0)
+            p_fwd = line.interpolate(d_fwd)
+            p_bwd = line.interpolate(d_bwd)
+            dx = p_fwd.x - p_bwd.x
+            dy = p_fwd.y - p_bwd.y
+            seg_len = np.sqrt(dx**2 + dy**2)
+            if seg_len < 1e-6:
+                distance_along += avstand_min
+                continue
+
+            # Normal (90°) til vegen: (-dy, dx) normalisert
+            nx, ny = -dy / seg_len, dx / seg_len
+
+            # Tilfeldig side og lengde
+            side = np.random.choice([1, -1])
+            lengde = np.random.uniform(lengde_min, lengde_max)
+
+            end_x = point_on_road.x + side * lengde * nx
+            end_y = point_on_road.y + side * lengde * ny
+
+            avkjorsel_line = geom.LineString([
+                (point_on_road.x, point_on_road.y),
+                (end_x, end_y),
+            ])
+
+            # Sjekk at endepunktet er innenfor bbox
+            if area_poly.contains(geom.Point(end_x, end_y)):
+                # Sjekk at avkjørselen ikke krysser andre veger
+                if avkjorsel_line.crosses(other_roads_union):
+                    distance_along += np.random.uniform(avstand_min, avstand_max)
+                    continue
+
+                # Interpoler høyder
+                z_start = interpolate_height_from_tin(point_on_road.x, point_on_road.y, all_points, triangles)
+                z_end = interpolate_height_from_tin(end_x, end_y, all_points, triangles)
+
+                nummer += 1
+                avkjorsler.append({
+                    "geometry": avkjorsel_line,
+                    "veg_type": "PrivatAvkjørsel",
+                    "veg_nummer": nummer,
+                    "veg_navn": f"Avkjørsel_{veg_navn}_{nummer}",
+                    "elevation_points": [
+                        (point_on_road.x, point_on_road.y, z_start),
+                        (end_x, end_y, z_end),
+                    ],
+                })
+
+            # Neste avkjørsel
+            distance_along += np.random.uniform(avstand_min, avstand_max)
+
+    return avkjorsler
+
+
 def generate_roads(terrain_data, crs="EPSG:25833"):
     """
     Generer riksvegnettet basert på terrengdata.
@@ -269,6 +381,15 @@ def generate_roads(terrain_data, crs="EPSG:25833"):
     if kommunalveg_b is None:
         raise RuntimeError("Klarte ikke generere KommunalVegB uten krysning")
 
+    # Generer private avkjørsler fra kommunale veger
+    alle_veger = [main_riksveg, branch_riksveg, kommunalveg_a, kommunalveg_b]
+    avkjorsler = generate_private_avkjorsler(
+        [kommunalveg_a, kommunalveg_b],
+        all_points, tri5.simplices, bbox,
+        all_roads=alle_veger,
+    )
+
     # Opprett GeoDataFrame
-    gdf_riksveg = gpd.GeoDataFrame([main_riksveg, branch_riksveg, kommunalveg_a, kommunalveg_b], crs=crs)
+    all_roads = [main_riksveg, branch_riksveg, kommunalveg_a, kommunalveg_b] + avkjorsler
+    gdf_riksveg = gpd.GeoDataFrame(all_roads, crs=crs)
     return gdf_riksveg
