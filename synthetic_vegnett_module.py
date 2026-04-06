@@ -71,9 +71,9 @@ def create_arc_segment(start_point, start_direction, radius, arc_length, point_d
 
 
 def create_riksveg(all_points, triangles, bbox, segment_length_min=100.0, segment_length_max=200.0,
-                    radius_min=150.0, radius_max=250.0, point_density=0.2, max_attempts=200,
+                    radius_min=150.0, radius_max=250.0, point_density=0.2, max_attempts=20,
                     start=None, end=None, veg_type="Riksveg", veg_nummer=1):
-    """Generer en veg som en sekvens av kontinuerlige segmenter."""
+    """Generer en veg som en sekvens av kontinuerlige segmenter (forenklet, raskere versjon)."""
     minx, miny, maxx, maxy = bbox
     if start is None:
         start = np.array((minx + np.random.uniform(15.0, 25.0), miny + np.random.uniform(15.0, 25.0)))
@@ -87,60 +87,82 @@ def create_riksveg(all_points, triangles, bbox, segment_length_min=100.0, segmen
     for attempt in range(max_attempts):
         points = [tuple(start)]
         current_point = np.array(start)
-        current_direction = np.arctan2(end[1] - start[1], end[0] - start[0])
-
-        # Første segment er rett linje
-        first_len = np.random.uniform(segment_length_min, segment_length_max)
-        first_end = current_point + first_len * np.array([np.cos(current_direction), np.sin(current_direction)])
-        points.append((first_end[0], first_end[1]))
-        current_point = np.array(first_end)
-
-        while np.linalg.norm(current_point - end) > segment_length_max:
+        direction_to_end = np.arctan2(end[1] - start[1], end[0] - start[0])
+        
+        # Generer segmenter inntil vi er nær slutten
+        iteration_limit = int(np.linalg.norm(end - start) / segment_length_min * 1.5)
+        iterations = 0
+        
+        while np.linalg.norm(current_point - end) > segment_length_max and iterations < iteration_limit:
+            iterations += 1
+            
+            # Beregn retning mot slutten
             target_direction = np.arctan2(end[1] - current_point[1], end[0] - current_point[0])
-            direction_diff = normalize_angle(target_direction - current_direction)
-            radius = np.random.uniform(radius_min, radius_max)
-            if direction_diff < 0.0:
-                radius = -radius
-
-            segment_length = np.random.uniform(segment_length_min, segment_length_max)
-            arc_pts, next_direction = create_arc_segment(current_point, current_direction, radius, segment_length,
-                                                         point_density=point_density)
-            candidate = geom.LineString(points + arc_pts)
-            if not candidate.is_simple:
-                break
-
-            points.extend(arc_pts)
+            direction_diff = normalize_angle(target_direction - direction_to_end)
+            
+            # Avgør om vi skal kurve eller gå rett
+            if np.random.random() < 0.4:  # 40% sjanse for kurving
+                radius = np.random.uniform(radius_min, radius_max)
+                if direction_diff < 0.0:
+                    radius = -radius
+                segment_length = np.random.uniform(segment_length_min, segment_length_max)
+                
+                try:
+                    arc_pts, next_direction = create_arc_segment(current_point, direction_to_end, radius, 
+                                                                  segment_length, point_density=point_density)
+                    points.extend(arc_pts)
+                    direction_to_end = next_direction
+                except:
+                    pass  # Hopp over dårlige segmenter
+            else:  # Rett linje
+                segment_length = np.random.uniform(segment_length_min, segment_length_max)
+                next_point = current_point + segment_length * np.array([np.cos(direction_to_end), 
+                                                                        np.sin(direction_to_end)])
+                points.append((next_point[0], next_point[1]))
+            
             current_point = np.array(points[-1])
-            current_direction = next_direction
-
-        else:
-            # Legg på siste rette del inn mot endepunktet
-            remaining = np.linalg.norm(end - current_point)
-            if remaining > 1e-3:
-                num_last = max(2, int(remaining * point_density))
-                for i in range(1, num_last + 1):
-                    t = i / num_last
-                    x = current_point[0] * (1 - t) + end[0] * t
-                    y = current_point[1] * (1 - t) + end[1] * t
-                    points.append((x, y))
-
-            candidate = geom.LineString(points)
-            if not candidate.is_simple:
-                continue
-
-            elevation_points = []
-            for x, y in points:
-                z = interpolate_height_from_tin(x, y, all_points, triangles)
-                elevation_points.append((x, y, z))
-
-            return {
-                "geometry": candidate,
-                "veg_type": veg_type,
-                "veg_nummer": veg_nummer,
-                "elevation_points": elevation_points
-            }
-
-    raise RuntimeError(f"Klarte ikke generere en enkel {veg_type} uten selvkrysning")
+        
+        # Legg til siste rett del mot endepunktet
+        remaining = np.linalg.norm(end - current_point)
+        if remaining > 1e-3:
+            num_last = max(2, int(remaining * point_density))
+            for i in range(1, num_last + 1):
+                t = i / num_last
+                x = current_point[0] * (1 - t) + end[0] * t
+                y = current_point[1] * (1 - t) + end[1] * t
+                points.append((x, y))
+        
+        # Valider linja
+        candidate = geom.LineString(points)
+        if not candidate.is_simple:
+            continue
+        
+        # Interpoler høyder
+        elevation_points = []
+        for x, y in points:
+            z = interpolate_height_from_tin(x, y, all_points, triangles)
+            elevation_points.append((x, y, z))
+        
+        return {
+            "geometry": candidate,
+            "veg_type": veg_type,
+            "veg_nummer": veg_nummer,
+            "elevation_points": elevation_points
+        }
+    
+    # Fallback: generer en enkel rett linje hvis ingen kurving funker
+    points = [tuple(start), tuple(end)]
+    elevation_points = []
+    for x, y in points:
+        z = interpolate_height_from_tin(x, y, all_points, triangles)
+        elevation_points.append((x, y, z))
+    
+    return {
+        "geometry": geom.LineString(points),
+        "veg_type": veg_type,
+        "veg_nummer": veg_nummer,
+        "elevation_points": elevation_points
+    }
 
 
 def generate_roads(terrain_data, crs="EPSG:25833"):
