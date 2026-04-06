@@ -79,6 +79,16 @@ py = np.random.uniform(miny+20, maxy-20, n_primary)
 pz = np.random.uniform(h_min, h_max, n_primary)
 primary = np.column_stack((px, py, pz))
 
+# Legg til faste hjørnepunkter i boksens fire hjørner
+corner_heights = np.random.uniform(h_min, h_max, 4)
+corner_points = np.array([
+    (minx, miny, corner_heights[0]),
+    (minx, maxy, corner_heights[1]),
+    (maxx, miny, corner_heights[2]),
+    (maxx, maxy, corner_heights[3])
+])
+primary = np.vstack([primary, corner_points])
+
 # 2) TIN fra primær
 tri0 = Delaunay(primary[:, :2])
 sec = add_level_points(primary, tri0.simplices, sec_per_tri, sec_delta)
@@ -299,8 +309,8 @@ def create_arc_segment(start_point, start_direction, radius, arc_length, point_d
 
 def create_riksveg(all_points, triangles, bbox, segment_length_min=100.0, segment_length_max=200.0,
                     radius_min=150.0, radius_max=250.0, point_density=0.2, max_attempts=200,
-                    start=None, end=None):
-    """Generer en riksveg som bygger seg som en sekvens av kontinuerlige segmenter."""
+                    start=None, end=None, veg_type="Riksveg", veg_nummer=1):
+    """Generer en veg som bygger seg som en sekvens av kontinuerlige segmenter."""
     minx, miny, maxx, maxy = bbox
     if start is None:
         start = np.array((minx + np.random.uniform(15.0, 25.0), miny + np.random.uniform(15.0, 25.0)))
@@ -362,19 +372,19 @@ def create_riksveg(all_points, triangles, bbox, segment_length_min=100.0, segmen
 
             return {
                 "geometry": candidate,
-                "veg_type": "Riksveg",
-                "veg_nummer": 1,
+                "veg_type": veg_type,
+                "veg_nummer": veg_nummer,
                 "elevation_points": elevation_points
             }
 
-    raise RuntimeError("Klarte ikke generere en enkel riksveg uten selvkrysning")
+    raise RuntimeError(f"Klarte ikke generere en enkel {veg_type} uten selvkrysning")
 
 
 # Generer riksveg
 bbox = (minx, miny, maxx, maxy)
 main_riksveg = create_riksveg(all_points, tri5.simplices, bbox)
 main_line = main_riksveg["geometry"]
-branch_point = main_line.interpolate(main_line.length * 0.30)
+branch_point = main_line.interpolate(main_line.length * 0.25)
 branch_start = (branch_point.x, branch_point.y)
 branch_end = np.array((minx + 20.0, maxy - 20.0))
 branch_riksveg = None
