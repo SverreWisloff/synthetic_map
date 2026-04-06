@@ -72,7 +72,7 @@ def create_arc_segment(start_point, start_direction, radius, arc_length, point_d
 
 def create_riksveg(all_points, triangles, bbox, segment_length_min=100.0, segment_length_max=200.0,
                     radius_min=150.0, radius_max=250.0, point_density=0.2, max_attempts=20,
-                    start=None, end=None, veg_type="Riksveg", veg_nummer=1):
+                    start=None, end=None, veg_type="Riksveg", veg_nummer=1, veg_navn=None):
     """Generer en veg som en sekvens av kontinuerlige segmenter (forenklet, raskere versjon)."""
     minx, miny, maxx, maxy = bbox
     if start is None:
@@ -93,6 +93,7 @@ def create_riksveg(all_points, triangles, bbox, segment_length_min=100.0, segmen
         iteration_limit = int(np.linalg.norm(end - start) / segment_length_min * 1.5)
         iterations = 0
         
+        prev_was_straight = False
         while np.linalg.norm(current_point - end) > segment_length_max and iterations < iteration_limit:
             iterations += 1
             
@@ -100,8 +101,8 @@ def create_riksveg(all_points, triangles, bbox, segment_length_min=100.0, segmen
             target_direction = np.arctan2(end[1] - current_point[1], end[0] - current_point[0])
             direction_diff = normalize_angle(target_direction - direction_to_end)
             
-            # Avgør om vi skal kurve eller gå rett
-            if np.random.random() < 0.4:  # 40% sjanse for kurving
+            # Avgør om vi skal kurve eller gå rett (maks én rett segment på rad)
+            if prev_was_straight or np.random.random() < 0.4:  # Tving kurve etter rett segment
                 radius = np.random.uniform(radius_min, radius_max)
                 if direction_diff < 0.0:
                     radius = -radius
@@ -112,6 +113,7 @@ def create_riksveg(all_points, triangles, bbox, segment_length_min=100.0, segmen
                                                                   segment_length, point_density=point_density)
                     points.extend(arc_pts)
                     direction_to_end = next_direction
+                    prev_was_straight = False
                 except:
                     pass  # Hopp over dårlige segmenter
             else:  # Rett linje
@@ -119,6 +121,7 @@ def create_riksveg(all_points, triangles, bbox, segment_length_min=100.0, segmen
                 next_point = current_point + segment_length * np.array([np.cos(direction_to_end), 
                                                                         np.sin(direction_to_end)])
                 points.append((next_point[0], next_point[1]))
+                prev_was_straight = True
             
             current_point = np.array(points[-1])
         
@@ -147,6 +150,7 @@ def create_riksveg(all_points, triangles, bbox, segment_length_min=100.0, segmen
             "geometry": candidate,
             "veg_type": veg_type,
             "veg_nummer": veg_nummer,
+            "veg_navn": veg_navn or f"{veg_type}{veg_nummer}",
             "elevation_points": elevation_points
         }
     
@@ -161,8 +165,22 @@ def create_riksveg(all_points, triangles, bbox, segment_length_min=100.0, segmen
         "geometry": geom.LineString(points),
         "veg_type": veg_type,
         "veg_nummer": veg_nummer,
+        "veg_navn": veg_navn or f"{veg_type}{veg_nummer}",
         "elevation_points": elevation_points
     }
+
+
+def create_kommunalveg(all_points, triangles, bbox, segment_length_min=50.0, segment_length_max=100.0,
+                       radius_min=70.0, radius_max=100.0, point_density=0.2, max_attempts=20,
+                       start=None, end=None, veg_type="KommunalVeg", veg_nummer=1, veg_navn=None):
+    """Generer en kommunalveg med kortere segmenter og mindre bueradius enn riksveg."""
+    return create_riksveg(
+        all_points, triangles, bbox,
+        segment_length_min=segment_length_min, segment_length_max=segment_length_max,
+        radius_min=radius_min, radius_max=radius_max,
+        point_density=point_density, max_attempts=max_attempts,
+        start=start, end=end, veg_type=veg_type, veg_nummer=veg_nummer, veg_navn=veg_navn,
+    )
 
 
 def generate_roads(terrain_data, crs="EPSG:25833"):
@@ -181,7 +199,7 @@ def generate_roads(terrain_data, crs="EPSG:25833"):
     bbox = terrain_data["bbox"]
     
     # Generer hovedriksveg
-    main_riksveg = create_riksveg(all_points, tri5.simplices, bbox)
+    main_riksveg = create_riksveg(all_points, tri5.simplices, bbox, veg_nummer=1, veg_navn="RiksvegA")
     
     # Generer grenveg fra 25% av hovedriksvegen til nordvesthjørnet
     main_line = main_riksveg["geometry"]
@@ -191,15 +209,66 @@ def generate_roads(terrain_data, crs="EPSG:25833"):
     
     branch_riksveg = None
     for attempt in range(50):
-        candidate = create_riksveg(all_points, tri5.simplices, bbox, start=branch_start, end=branch_end)
+        candidate = create_riksveg(
+            all_points,
+            tri5.simplices,
+            bbox,
+            start=branch_start,
+            end=branch_end,
+            veg_nummer=2,
+            veg_navn="RiksvegB",
+        )
         if not candidate["geometry"].crosses(main_line) and not candidate["geometry"].overlaps(main_line):
             branch_riksveg = candidate
-            branch_riksveg["veg_nummer"] = 2
             break
 
     if branch_riksveg is None:
         raise RuntimeError("Klarte ikke generere en sekundær riksveg uten krysning")
 
+    # Generer KommunalVegA fra midt på RiksvegA til midten av nordkanten
+    kommunal_start_pt = main_line.interpolate(main_line.length * 0.5)
+    kommunal_start = (kommunal_start_pt.x, kommunal_start_pt.y)
+    kommunal_end = ((bbox[0] + bbox[2]) * 0.5, bbox[3] - 20.0)
+
+    branch_line = branch_riksveg["geometry"]
+    kommunalveg_a = None
+    for attempt in range(50):
+        candidate = create_kommunalveg(
+            all_points, tri5.simplices, bbox,
+            start=kommunal_start, end=kommunal_end,
+            veg_nummer=1, veg_navn="KommunalVegA",
+        )
+        cline = candidate["geometry"]
+        if not cline.crosses(main_line) and not cline.crosses(branch_line):
+            kommunalveg_a = candidate
+            break
+
+    if kommunalveg_a is None:
+        raise RuntimeError("Klarte ikke generere KommunalVegA uten krysning")
+
+    # Generer KommunalVegB fra 20% ut på KommunalVegA til 20% ut på RiksvegB
+    komm_a_line = kommunalveg_a["geometry"]
+    kommb_start_pt = komm_a_line.interpolate(komm_a_line.length * 0.25)
+    kommb_end_pt = branch_line.interpolate(branch_line.length * 0.25)
+    kommb_start = (kommb_start_pt.x, kommb_start_pt.y)
+    kommb_end = (kommb_end_pt.x, kommb_end_pt.y)
+
+    kommunalveg_b = None
+    komm_a_line_geom = kommunalveg_a["geometry"]
+    for attempt in range(50):
+        candidate = create_kommunalveg(
+            all_points, tri5.simplices, bbox,
+            start=kommb_start, end=kommb_end,
+            veg_nummer=2, veg_navn="KommunalVegB",
+        )
+        cline = candidate["geometry"]
+        if not cline.crosses(main_line) and not cline.crosses(branch_line) and not cline.crosses(komm_a_line_geom):
+            kommunalveg_b = candidate
+            break
+
+    if kommunalveg_b is None:
+        raise RuntimeError("Klarte ikke generere KommunalVegB uten krysning")
+
     # Opprett GeoDataFrame
-    gdf_riksveg = gpd.GeoDataFrame([main_riksveg, branch_riksveg], crs=crs)
+    gdf_riksveg = gpd.GeoDataFrame([main_riksveg, branch_riksveg, kommunalveg_a, kommunalveg_b], crs=crs)
     return gdf_riksveg
