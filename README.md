@@ -7,7 +7,15 @@ Et Python-skript som genererer syntetiske terrengdata ved hjelp av Delaunay-tria
 - Genererer syntetiske terrengpunkter med flere detaljnivåer (primær, sekundær, tertiær, kvaternær, kvintær)
 - Lager TIN (Triangulert irregulær nettverk) mesh-representasjon
 - Genererer ekvidistante konturlinjer på 1-meter intervaller direkte fra TIN (vektor-domene)
-- Utskrift av resultater til GeoPackage-format for GIS-applikasjoner
+- Genererer en syntetisk riksveg gjennom området med en sekvens av kontinuerlige vegseksjoner
+- Genererer også en sekundær riksveg som starter ved et kryss 30 % inn på hovedriksvegen og går mot nordvest-hjørnet
+- Riksvegene bygges med tangent-kontinuerlige buesegmenter som følger endepunktet
+- Segmentlengde velges tilfeldig mellom 100 og 200 meter
+- Bueradius velges tilfeldig mellom 150 og 250 meter
+- Radiusens tegn settes ut fra om buen skal føre vegen mot endepunktet
+- Hvert punkt i veilinjen får høyde interpolert fra TIN-modellen
+- Selv-kryssing stoppes ved å kreve at linjen er enkel før den aksepteres
+- Output skrives til GeoPackage-format for GIS-applikasjoner
 
 ## Krav
 
@@ -46,13 +54,13 @@ Dette vil lage `synthetic_hoydekurve.gpkg` som inneholder:
 - `terrain_points`: Genererte høydepunkter
 - `terrain_tin`: Triangulert irregulært nettverk
 - `hoydekurver_1m`: 1-meter ekvidistante konturlinjer
+- `vegnett_riksveg`: Riksvegnett med to riksveger (hovedveg + nordvestlig avgreningsveg)
 
 ## Konfigurasjon
 
 Rediger parametrene øverst i `synthetic_hoydekurve.py`:
 - `minx, miny, maxx, maxy`: UTM-koordinater for området (påvirker størrelsen på kartet)
 - `crs`: Koordinatsystem (standard: EPSG:25833, UTM sone 33N for Norge)
-- `seed`: Tilfeldig seed for reproduserbarhet
 - `h_min, h_max`: Minimum og maksimum høyde for terrenget (definerer høydeområdet for punkter og kurver)
 - `n_primary`: Antall primære punkter (jo flere, jo mer detaljert og jevn basis-TIN)
 - `sec_per_tri`: Antall sekundære punkter per trekant i nivå 1 (øker tetthet og detalj på første nivå)

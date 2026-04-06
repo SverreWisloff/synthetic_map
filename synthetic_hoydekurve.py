@@ -4,6 +4,8 @@ import shapely.geometry as geom
 from scipy.spatial import Delaunay
 import os
 
+np.random.seed(None)
+
 # ---- parametrer ----
 minx, miny, maxx, maxy = 500000, 6700000, 502000, 6702000  # UTM-koordinater for området (påvirker størrelsen på kartet)
 crs = "EPSG:25833"  # Koordinatsystem (UTM zone 33N for Norge)
@@ -150,7 +152,7 @@ def interpolate_height_from_tin(x, y, points, triangles):
     nearest_idx = np.argmin(distances)
     return float(all_points[nearest_idx][2])
 
-def generate_road_segment(start_xy, end_xy, road_type, terrain_points=None, triangles=None):
+def generate_road_segment(start_xy, end_xy, road_type, terrain_points=None, triangles=None, start_direction=None):
     """Generer et vegsegment med sekvens av rette deler og buer"""
     segment_points = []
 
@@ -166,7 +168,13 @@ def generate_road_segment(start_xy, end_xy, road_type, terrain_points=None, tria
     dx = end_xy[0] - start_xy[0]
     dy = end_xy[1] - start_xy[1]
     total_length = np.sqrt(dx**2 + dy**2)
-    direction = np.arctan2(dy, dx)
+    
+    if start_direction is not None:
+        # Bruk oppgitt startretning (for kontinuitet fra tidligere segment)
+        direction = start_direction
+    else:
+        # Beregn retning fra start til slutt
+        direction = np.arctan2(dy, dx)
 
     current_pos = np.array(start_xy)
     current_direction = direction
@@ -257,112 +265,128 @@ def generate_road_segment(start_xy, end_xy, road_type, terrain_points=None, tria
 
     return segment_points
 
-def create_road_network(all_points, triangles, bbox, num_riksveger=2, num_kommune=4, num_private=5):
-    """Generer et vegnett med forbundne veier"""
-    minx, miny, maxx, maxy = bbox
-    width = maxx - minx
-    height = maxy - miny
-    
-    roads = []  # Liste over veier med type og geometri
-    road_intersections = []  # Knutepunkter hvor veier møtes
-    
-    # Strategiske punkter som hjørner og midtpunkter for å sikre topologisk sammenheng
-    strategic_points = [
-        (minx + width * 0.2, miny + height * 0.3),   # punkt 0
-        (minx + width * 0.8, miny + height * 0.3),   # punkt 1
-        (minx + width * 0.5, miny + height * 0.5),   # punkt 2 (sentrum)
-        (minx + width * 0.3, miny + height * 0.8),   # punkt 3
-        (minx + width * 0.7, miny + height * 0.8),   # punkt 4
-        (minx + width * 0.5, miny + height * 0.1),   # punkt 5 (nord)
-        (minx + width * 0.5, miny + height * 0.9),   # punkt 6 (sør)
-    ]
-    
-    # Riksveger - hovedveier som krysser kartet
-    riksveg_routes = [
-        [(strategic_points[5][0], strategic_points[5][1]), 
-         (strategic_points[2][0], strategic_points[2][1]),
-         (strategic_points[6][0], strategic_points[6][1])],  # Nord-Sør
-        [(minx + width * 0.1, miny + height * 0.5),
-         (strategic_points[2][0], strategic_points[2][1]),
-         (maxx - width * 0.1, miny + height * 0.5)]  # Øst-Vest
-    ]
-    
-    for idx, route in enumerate(riksveg_routes):
-        total_points = []
-        for i in range(len(route) - 1):
-            start = route[i]
-            end = route[i + 1]
-            segment = generate_road_segment(start, end, "Riksveg",
-                                           terrain_points=all_points, triangles=triangles)
-            total_points.extend(segment)
-        
-        if total_points:
-            line_geom = geom.LineString([(p[0], p[1]) for p in total_points])
-            roads.append({
-                "geometry": line_geom,
-                "veg_type": "Riksveg",
-                "veg_nummer": idx + 1,
-                "elevation_points": total_points
-            })
-    
-    # Kommuneveger - sekundærveier som forbinder strategiske punkter
-    kommune_routes = [
-        [strategic_points[0], strategic_points[2]],  # Veg 1
-        [strategic_points[1], strategic_points[2]],  # Veg 2
-        [strategic_points[3], strategic_points[2]],  # Veg 3
-        [strategic_points[4], strategic_points[2]],  # Veg 4
-    ]
-    
-    for idx, route in enumerate(kommune_routes):
-        total_points = []
-        for i in range(len(route) - 1):
-            start = route[i]
-            end = route[i + 1]
-            segment = generate_road_segment(start, end, "Kommuneveg",
-                                           terrain_points=all_points, triangles=triangles)
-            total_points.extend(segment)
-        
-        if total_points:
-            line_geom = geom.LineString([(p[0], p[1]) for p in total_points])
-            roads.append({
-                "geometry": line_geom,
-                "veg_type": "Kommuneveg",
-                "veg_nummer": idx + 1,
-                "elevation_points": total_points
-            })
-    
-    # Private veier - kortere lokale veier
-    private_routes = [
-        [(minx + width * 0.25, miny + height * 0.25), (minx + width * 0.35, miny + height * 0.35)],
-        [(minx + width * 0.65, miny + height * 0.25), (minx + width * 0.75, miny + height * 0.35)],
-        [(minx + width * 0.2, miny + height * 0.6), (minx + width * 0.3, miny + height * 0.7)],
-        [(minx + width * 0.7, miny + height * 0.6), (minx + width * 0.8, miny + height * 0.7)],
-        [(minx + width * 0.45, miny + height * 0.4), (minx + width * 0.55, miny + height * 0.4)],
-    ]
-    
-    for idx, route in enumerate(private_routes):
-        total_points = []
-        for i in range(len(route) - 1):
-            start = route[i]
-            end = route[i + 1]
-            segment = generate_road_segment(start, end, "Privatveg",
-                                           terrain_points=all_points, triangles=triangles)
-            total_points.extend(segment)
-        
-        if total_points:
-            line_geom = geom.LineString([(p[0], p[1]) for p in total_points])
-            roads.append({
-                "geometry": line_geom,
-                "veg_type": "Privatveg",
-                "veg_nummer": idx + 1,
-                "elevation_points": total_points
-            })
-    
-    return roads
+def normalize_angle(angle):
+    """Normaliser vinkel til intervallet [-pi, pi]"""
+    while angle > np.pi:
+        angle -= 2 * np.pi
+    while angle < -np.pi:
+        angle += 2 * np.pi
+    return angle
 
-# Generer vegnett
+
+def sample_arc(center, radius, start_angle, end_angle, num_points=12):
+    angles = np.linspace(start_angle, end_angle, num_points)
+    return [(center[0] + radius * np.cos(angle), center[1] + radius * np.sin(angle)) for angle in angles[1:]]
+
+
+def compute_arc_center(start_point, direction, radius, turn_direction):
+    normal = np.array([-np.sin(direction), np.cos(direction)])
+    return np.array(start_point) + turn_direction * radius * normal
+
+
+def create_arc_segment(start_point, start_direction, radius, arc_length, point_density=0.2):
+    """Lag et buesegment tangent til startretningen."""
+    radius_abs = abs(radius)
+    arc_angle = arc_length / radius_abs
+    turn_direction = 1 if radius > 0 else -1
+    center = compute_arc_center(start_point, start_direction, radius_abs, turn_direction)
+    start_angle = np.arctan2(start_point[1] - center[1], start_point[0] - center[0])
+    end_angle = start_angle + turn_direction * arc_angle
+    num_points = max(3, int(arc_length * point_density))
+    arc_pts = sample_arc(center, radius_abs, start_angle, end_angle, num_points=num_points)
+    return arc_pts, normalize_angle(start_direction + turn_direction * arc_angle)
+
+
+def create_riksveg(all_points, triangles, bbox, segment_length_min=100.0, segment_length_max=200.0,
+                    radius_min=150.0, radius_max=250.0, point_density=0.2, max_attempts=200,
+                    start=None, end=None):
+    """Generer en riksveg som bygger seg som en sekvens av kontinuerlige segmenter."""
+    minx, miny, maxx, maxy = bbox
+    if start is None:
+        start = np.array((minx + np.random.uniform(15.0, 25.0), miny + np.random.uniform(15.0, 25.0)))
+    else:
+        start = np.array(start)
+    if end is None:
+        end = np.array((maxx - np.random.uniform(15.0, 25.0), maxy - np.random.uniform(15.0, 25.0)))
+    else:
+        end = np.array(end)
+
+    for attempt in range(max_attempts):
+        points = [tuple(start)]
+        current_point = np.array(start)
+        current_direction = np.arctan2(end[1] - start[1], end[0] - start[0])
+
+        # Første segment er rett linje
+        first_len = np.random.uniform(segment_length_min, segment_length_max)
+        first_end = current_point + first_len * np.array([np.cos(current_direction), np.sin(current_direction)])
+        points.append((first_end[0], first_end[1]))
+        current_point = np.array(first_end)
+
+        while np.linalg.norm(current_point - end) > segment_length_max:
+            target_direction = np.arctan2(end[1] - current_point[1], end[0] - current_point[0])
+            direction_diff = normalize_angle(target_direction - current_direction)
+            radius = np.random.uniform(radius_min, radius_max)
+            if direction_diff < 0.0:
+                radius = -radius
+
+            segment_length = np.random.uniform(segment_length_min, segment_length_max)
+            arc_pts, next_direction = create_arc_segment(current_point, current_direction, radius, segment_length,
+                                                         point_density=point_density)
+            candidate = geom.LineString(points + arc_pts)
+            if not candidate.is_simple:
+                break
+
+            points.extend(arc_pts)
+            current_point = np.array(points[-1])
+            current_direction = next_direction
+
+        else:
+            # Legg på siste rette del inn mot endepunktet
+            remaining = np.linalg.norm(end - current_point)
+            if remaining > 1e-3:
+                num_last = max(2, int(remaining * point_density))
+                for i in range(1, num_last + 1):
+                    t = i / num_last
+                    x = current_point[0] * (1 - t) + end[0] * t
+                    y = current_point[1] * (1 - t) + end[1] * t
+                    points.append((x, y))
+
+            candidate = geom.LineString(points)
+            if not candidate.is_simple:
+                continue
+
+            elevation_points = []
+            for x, y in points:
+                z = interpolate_height_from_tin(x, y, all_points, triangles)
+                elevation_points.append((x, y, z))
+
+            return {
+                "geometry": candidate,
+                "veg_type": "Riksveg",
+                "veg_nummer": 1,
+                "elevation_points": elevation_points
+            }
+
+    raise RuntimeError("Klarte ikke generere en enkel riksveg uten selvkrysning")
+
+
+# Generer riksveg
 bbox = (minx, miny, maxx, maxy)
-road_network = create_road_network(all_points, tri5.simplices, bbox)
+main_riksveg = create_riksveg(all_points, tri5.simplices, bbox)
+main_line = main_riksveg["geometry"]
+branch_point = main_line.interpolate(main_line.length * 0.30)
+branch_start = (branch_point.x, branch_point.y)
+branch_end = np.array((minx + 20.0, maxy - 20.0))
+branch_riksveg = None
+for attempt in range(50):
+    candidate = create_riksveg(all_points, tri5.simplices, bbox, start=branch_start, end=branch_end)
+    if not candidate["geometry"].crosses(main_line) and not candidate["geometry"].overlaps(main_line):
+        branch_riksveg = candidate
+        branch_riksveg["veg_nummer"] = 2
+        break
+
+if branch_riksveg is None:
+    raise RuntimeError("Klarte ikke generere en sekundær riksveg uten krysning")
 
 # 10) Skrive til GeoPackage
 if os.path.exists(out_gpkg):
@@ -371,16 +395,9 @@ gdf_pts.to_file(out_gpkg, layer="terrain_points", driver="GPKG")
 gdf_tin.to_file(out_gpkg, layer="terrain_tin", driver="GPKG")
 gdf_contours.to_file(out_gpkg, layer="hoydekurver_1m", driver="GPKG")
 
-# Skriv vegnett til separate lag
-for road_type in ["Riksveg", "Kommuneveg", "Privatveg"]:
-    roads_of_type = [r for r in road_network if r["veg_type"] == road_type]
-    if roads_of_type:
-        gdf_roads = gpd.GeoDataFrame(roads_of_type, crs=crs)
-        layer_name = f"vegnett_{road_type.lower()}"
-        gdf_roads.to_file(out_gpkg, layer=layer_name, driver="GPKG")
+gdf_riksveg = gpd.GeoDataFrame([main_riksveg, branch_riksveg], crs=crs)
+gdf_riksveg.to_file(out_gpkg, layer="vegnett_riksveg", driver="GPKG")
 
-print("Ferdig: syntetisk terreng og høydekurver i", out_gpkg)
+print("Ferdig: syntetisk terreng, høydekurver og riksveg i", out_gpkg)
 print("Punkter:", len(gdf_pts), "TIN-triangler:", len(gdf_tin), "Kurver:", len(gdf_contours))
-print("Vegnett: Riksveger:", len([r for r in road_network if r["veg_type"] == "Riksveg"]),
-      "Kommuneveger:", len([r for r in road_network if r["veg_type"] == "Kommuneveg"]),
-      "Privatveier:", len([r for r in road_network if r["veg_type"] == "Privatveg"]))
+print("Riksveg:", 2)
