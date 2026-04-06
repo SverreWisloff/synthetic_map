@@ -393,3 +393,57 @@ def generate_roads(terrain_data, crs="EPSG:25833"):
     all_roads = [main_riksveg, branch_riksveg, kommunalveg_a, kommunalveg_b] + avkjorsler
     gdf_riksveg = gpd.GeoDataFrame(all_roads, crs=crs)
     return gdf_riksveg
+
+
+# Vegbredder (halvparten brukes som buffer)
+VEGBREDDE = {
+    "Riksveg": 10.0,
+    "KommunalVeg": 5.0,
+    "PrivatAvkjørsel": 4.0,
+}
+
+
+def generate_vegkant(gdf_roads, crs="EPSG:25833"):
+    """
+    Generer vegkanter ved å buffre senterlinjer med halv vegbredde
+    og trekke ut venstre og høyre kantlinje.
+
+    Args:
+        gdf_roads: GeoDataFrame med veger (må ha 'veg_type')
+        crs: Koordinatsystem
+
+    Returns:
+        GeoDataFrame med vegkant-linjer
+    """
+    from shapely.geometry import MultiLineString
+
+    vegkanter = []
+
+    for _, road in gdf_roads.iterrows():
+        veg_type = road["veg_type"]
+        bredde = VEGBREDDE.get(veg_type, 4.0)
+        buffer_dist = bredde / 2.0
+
+        # Buffer senterlinjen
+        buffered = road.geometry.buffer(buffer_dist, cap_style=2)  # flat endecap
+
+        # Hent ytre grense som vegkant-linjer
+        boundary = buffered.boundary
+        if boundary.is_empty:
+            continue
+
+        # Boundary kan være LineString eller MultiLineString
+        if isinstance(boundary, MultiLineString):
+            lines = list(boundary.geoms)
+        else:
+            lines = [boundary]
+
+        for line in lines:
+            vegkanter.append({
+                "geometry": line,
+                "veg_type": veg_type,
+                "veg_navn": road.get("veg_navn", ""),
+                "vegbredde": bredde,
+            })
+
+    return gpd.GeoDataFrame(vegkanter, crs=crs)

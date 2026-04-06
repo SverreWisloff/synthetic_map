@@ -23,7 +23,7 @@ import sys
 import argparse
 import geopandas as gpd
 from synthetic_hoydekurve_module import generate_terrain
-from synthetic_vegnett_module import generate_roads
+from synthetic_vegnett_module import generate_roads, generate_vegkant
 from synthetic_bygning_module import generate_buildings
 
 # ===== KONFIGURASJON =====
@@ -111,10 +111,16 @@ def generate_all_layers(layers=None):
         print(f"Skrevet til {OUTPUT_ROADS_GPKG}")
         print("  ✓ vegnett_riksveg")
         
+        # Generer vegkanter
+        gdf_vegkant = generate_vegkant(gdf_roads, crs=CRS)
+        gdf_vegkant.to_file(OUTPUT_ROADS_GPKG, layer="vegkant", driver="GPKG")
+        print("  \u2713 vegkant")
+        
         print(f"\nVeg-statistikk ({OUTPUT_ROADS_GPKG}):")
         print(f"  Veger totalt: {len(gdf_roads)}")
         for vtype, count in gdf_roads["veg_type"].value_counts().items():
             print(f"  {vtype}: {count}")
+        print(f"  Vegkanter: {len(gdf_vegkant)}")
     
     # Generer og skriv bygninger
     if 'buildings' in layers:
