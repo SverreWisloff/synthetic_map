@@ -8,12 +8,14 @@ Bruk:
 Tilgjengelige lag:
     - terrain: Terrengpunkter, TIN, og høydekurver → synthetic_terrain.gpkg
     - roads: Vegnett (riksveier) → synthetic_vegnett.gpkg
+    - buildings: Bygninger → synthetic_bygning.gpkg
     - all: Alt (standardvalg)
 
 Eksempler:
     python synthetic_map.py                          # Generer alt
     python synthetic_map.py --layers terrain         # Bare terreng
     python synthetic_map.py --layers roads           # Bare vegnett
+    python synthetic_map.py --layers buildings        # Bare bygninger
 """
 
 import os
@@ -22,6 +24,7 @@ import argparse
 import geopandas as gpd
 from synthetic_hoydekurve_module import generate_terrain
 from synthetic_vegnett_module import generate_roads
+from synthetic_bygning_module import generate_buildings
 
 # ===== KONFIGURASJON =====
 
@@ -32,6 +35,7 @@ CRS = "EPSG:25833"  # UTM zone 33N for Norge
 # Output-filer
 OUTPUT_TERRAIN_GPKG = "synthetic_terrain.gpkg"
 OUTPUT_ROADS_GPKG = "synthetic_vegnett.gpkg"
+OUTPUT_BUILDINGS_GPKG = "synthetic_bygning.gpkg"
 
 # Terrengparametre
 TERRAIN_CONFIG = {
@@ -69,7 +73,7 @@ def generate_all_layers(layers=None):
                 Hvis None, generer alt
     """
     if layers is None:
-        layers = ['terrain', 'roads']
+        layers = ['terrain', 'roads', 'buildings']
     
     # Generer terreng (alltid nødvendig for andre beregninger)
     print("Genererer terreng...")
@@ -108,7 +112,31 @@ def generate_all_layers(layers=None):
         print("  ✓ vegnett_riksveg")
         
         print(f"\nVeg-statistikk ({OUTPUT_ROADS_GPKG}):")
-        print(f"  Riksveger: {len(gdf_roads)}")
+        print(f"  Veger totalt: {len(gdf_roads)}")
+        for vtype, count in gdf_roads["veg_type"].value_counts().items():
+            print(f"  {vtype}: {count}")
+    
+    # Generer og skriv bygninger
+    if 'buildings' in layers:
+        print(f"\nGenererer bygninger...")
+        if 'roads' not in layers:
+            print("  (genererer vegnett først...)")
+            gdf_roads = generate_roads(terrain_data, crs=CRS)
+        
+        gdf_buildings = generate_buildings(gdf_roads, bbox=BBOX, crs=CRS)
+        
+        if os.path.exists(OUTPUT_BUILDINGS_GPKG):
+            os.remove(OUTPUT_BUILDINGS_GPKG)
+        
+        gdf_buildings.to_file(OUTPUT_BUILDINGS_GPKG, layer="bygninger", driver="GPKG")
+        print(f"Skrevet til {OUTPUT_BUILDINGS_GPKG}")
+        print("  ✓ bygninger")
+        
+        print(f"\nBygning-statistikk ({OUTPUT_BUILDINGS_GPKG}):")
+        print(f"  Bygninger totalt: {len(gdf_buildings)}")
+        if len(gdf_buildings) > 0:
+            for btype, count in gdf_buildings["bygning_type"].value_counts().items():
+                print(f"  {btype}: {count}")
     
     print("\n✅ Kartgenerering fullført")
 
@@ -125,12 +153,12 @@ def main():
     
     # Parser lagargument
     if args.layers.lower() == 'all':
-        layers = ['terrain', 'roads']
+        layers = ['terrain', 'roads', 'buildings']
     else:
         layers = [l.strip().lower() for l in args.layers.split(',')]
     
     # Valider lagene
-    valid_layers = {'terrain', 'roads'}
+    valid_layers = {'terrain', 'roads', 'buildings'}
     invalid = set(layers) - valid_layers
     if invalid:
         print(f"❌ Feil: ukjente lag: {invalid}")
