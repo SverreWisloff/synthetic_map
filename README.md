@@ -1,20 +1,25 @@
 # Syntetisk Kart - Terrenggenerering
 
-Et Python-skript som genererer syntetiske terrengdata ved hjelp av Delaunay-triangulering og vektor-basert konturlinje-generering.
+Et Python-skript som genererer syntetiske kartlar (terreng, høydekurver, vegnett) til GeoPackage-format.
+
+## Arkitektur
+
+Prosjektet er organisert i moduler for fleksibel og utvidbar kartgenerering:
+- `synthetic_map.py` - Hovedprogram og orkestrering
+- `synthetic_hoydekurve_module.py` - Terreng- og høydekurvegenerering
+- `synthetic_vegnett_module.py` - Vegnettsenerering
+- `synthetic_hoydekurve.py` - Legacy-versjon (kan slettes)
 
 ## Funksjoner
 
 - Genererer syntetiske terrengpunkter med flere detaljnivåer (primær, sekundær, tertiær, kvaternær, kvintær)
 - Lager TIN (Triangulert irregulær nettverk) mesh-representasjon
 - Genererer ekvidistante konturlinjer på 1-meter intervaller direkte fra TIN (vektor-domene)
-- Genererer en syntetisk riksveg gjennom området med en sekvens av kontinuerlige vegseksjoner
-- Genererer også en sekundær riksveg som starter ved et kryss 30 % inn på hovedriksvegen og går mot nordvest-hjørnet
-- Riksvegene bygges med tangent-kontinuerlige buesegmenter som følger endepunktet
-- Segmentlengde velges tilfeldig mellom 100 og 200 meter
-- Bueradius velges tilfeldig mellom 150 og 250 meter
-- Radiusens tegn settes ut fra om buen skal føre vegen mot endepunktet
-- Hvert punkt i veilinjen får høyde interpolert fra TIN-modellen
-- Selv-kryssing stoppes ved å kreve at linjen er enkel før den aksepteres
+- **Modulell kartlagsgenerering** - velg hvilke lag som skal genereres
+- Genererer to riksveger gjennom området med tangent-kontinuerlige buesegmenter
+- Hovedriksveg går fra sørvest til nordøst
+- Sekundærveg starter ved 25% av hovedvegen og går til nordvest-hjørnet
+- Hvert point i veilinjen får høyde interpolert fra TIN-modellen
 - Output skrives til GeoPackage-format for GIS-applikasjoner
 
 ## Krav
@@ -45,40 +50,57 @@ pip install -r requirements.txt
 
 ## Bruk
 
-Kjør skriptet for å generere syntetisk terreng:
+### Kjør hele genereringen
 ```bash
-python synthetic_hoydekurve.py
+python synthetic_map.py
 ```
 
-Dette vil lage `synthetic_hoydekurve.gpkg` som inneholder:
-- `terrain_points`: Genererte høydepunkter
-- `terrain_tin`: Triangulert irregulært nettverk
-- `hoydekurver_1m`: 1-meter ekvidistante konturlinjer
-- `vegnett_riksveg`: Riksvegnett med to riksveger (hovedveg + nordvestlig avgreningsveg)
+### Kjør spesifikke kartlag
+```bash
+# Kun terreng
+python synthetic_map.py --layers terrain
 
-## Konfigurasjon
+# Kun høydekurver
+python synthetic_map.py --layers contours
 
-Rediger parametrene øverst i `synthetic_hoydekurve.py`:
-- `minx, miny, maxx, maxy`: UTM-koordinater for området (påvirker størrelsen på kartet)
-- `crs`: Koordinatsystem (standard: EPSG:25833, UTM sone 33N for Norge)
-- `h_min, h_max`: Minimum og maksimum høyde for terrenget (definerer høydeområdet for punkter og kurver)
-- `n_primary`: Antall primære punkter (jo flere, jo mer detaljert og jevn basis-TIN)
-- `sec_per_tri`: Antall sekundære punkter per trekant i nivå 1 (øker tetthet og detalj på første nivå)
-- `ter_per_tri`: Antall tertiære punkter per trekant i nivå 2 (videre økning i tetthet)
-- `qua_per_tri`: Antall kvaternære punkter per trekant i nivå 3 (enda mer detalj)
-- `qui_per_tri`: Antall kvintære punkter per trekant i nivå 4 (fineste nivå for høy oppløsning)
-- `sec_delta`: Standardavvik for høydevariasjon i sekundære punkter (større verdi gir mer terrengvariasjon)
-- `ter_delta`: Standardavvik for tertiære punkter (mindre variasjon enn sekundære)
-- `qua_delta`: Standardavvik for kvaternære punkter (finjustering av detaljer)
-- `qui_delta`: Standardavvik for kvintære punkter (minimal variasjon for glatt terreng)
-- `ekvidistanse`: Avstand mellom høydekurver (standard: 1 meter)
+# Kun vegenett
+python synthetic_map.py --layers roads
+
+# Terreng og vegnett
+python synthetic_map.py --layers terrain,roads
+```
+
+**Tilgjengelige lag:**
+- `terrain` - Terrengpunkter og TIN-triangler
+- `contours` - Høydekurver
+- `roads` - Vegnett (riksveier)
+- `all` - Alt (standardvalg)
 
 ## Output
 
-Skriptet genererer en GeoPackage-fil med statistikk skrevet til konsollen:
+Skriptet genererer `synthetic_hoydekurve.gpkg` som inneholder:
+- `terrain_points`: Genererte høydepunkter (når `terrain` er aktivert)
+- `terrain_tin`: Triangulert irregulært nettverk (når `terrain` er aktivert)
+- `hoydekurver_1m`: 1-meter ekvidistante konturlinjer (når `contours` er aktivert)
+- `vegnett_riksveg`: Riksvegnett med 2 riksveger (når `roads` er aktivert)
+
+Konsoll-output viser:
 - Antall terrengpunkter
-- Antall TIN-trekant
+- Antall TIN-trekanter
 - Antall konturlinjer
+- Antall riksveger
+
+## Konfigurasjon
+
+Rediger parametrene i `synthetic_map.py`:
+- `BBOX`: UTM-koordinater for området (påvirker størrelsen på kartet)
+- `CRS`: Koordinatsystem (standard: EPSG:25833, UTM sone 33N for Norge)
+- `TERRAIN_PARAMS`: Terrengparametre:
+  - `h_min, h_max`: Min/maks høyde
+  - `n_primary`: Antall primære punkter
+  - `sec/ter/qua/qui_per_tri`: Punkter per trekant på hvert nivå
+  - `sec/ter/qua/qui_delta`: Standardavvik for høydevariasjon per nivå
+  - `ekvidistanse`: Avstand mellom høydekurver
 
 ## Lisens
 
