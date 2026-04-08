@@ -6,6 +6,7 @@ Genererer terrengpunkter, TIN, og høydekurver.
 import numpy as np
 import geopandas as gpd
 import shapely.geometry as geom
+from shapely.ops import linemerge, unary_union
 from scipy.spatial import Delaunay
 
 
@@ -43,7 +44,7 @@ def generate_contours_from_tin(points, triangles, levels):
     """Generer høydekurver fra TIN ved konturinterpole."""
     contours = []
     for level in levels:
-        lines = []
+        segments = []
         for tri in triangles:
             p0, p1, p2 = points[tri[0]], points[tri[1]], points[tri[2]]
             h0, h1, h2 = p0[2], p1[2], p2[2]
@@ -57,15 +58,43 @@ def generate_contours_from_tin(points, triangles, levels):
                         y = pa[1] + t * (pb[1] - pa[1])
                         intersections.append((x, y))
             if len(intersections) == 2:
-                lines.append(geom.LineString(intersections))
-        for line in lines:
-            contours.append({"geometry": line, "hoyde": float(level)})
+                segments.append(geom.LineString(intersections))
+        # Slå sammen segmenter til sammenhengende linjer
+        if segments:
+            merged = linemerge(unary_union(segments))
+            if merged.geom_type == 'LineString':
+                merged = [merged]
+            elif merged.geom_type == 'MultiLineString':
+                merged = list(merged.geoms)
+            else:
+                merged = []
+            for line in merged:
+                contours.append({"geometry": line, "hoyde": float(level)})
     return contours
+
+
+def _smooth_line(line, iterations=2):
+    """Enkel Chaikin-glatting av en linje."""
+    coords = list(line.coords)
+    for _ in range(iterations):
+        if len(coords) < 3:
+            break
+        new_coords = [coords[0]]
+        for i in range(len(coords) - 1):
+            p0 = coords[i]
+            p1 = coords[i + 1]
+            q = (0.75 * p0[0] + 0.25 * p1[0], 0.75 * p0[1] + 0.25 * p1[1])
+            r = (0.25 * p0[0] + 0.75 * p1[0], 0.25 * p0[1] + 0.75 * p1[1])
+            new_coords.extend([q, r])
+        new_coords.append(coords[-1])
+        coords = new_coords
+    return geom.LineString(coords)
 
 
 def generate_terrain(bbox, crs="EPSG:25833", h_min=100.0, h_max=130.0,
                     n_primary=15, sec_per_tri=5, ter_per_tri=3, qua_per_tri=3, qui_per_tri=3,
-                    sec_delta=3.0, ter_delta=1.0, qua_delta=0.4, qui_delta=0.1, ekvidistanse=1.0):
+                    sec_delta=3.0, ter_delta=1.0, qua_delta=0.4, qui_delta=0.1, ekvidistanse=1.0,
+                    min_kurvlengde=50.0, glatt_iterasjoner=2):
     """
     Generer syntetisk terreng med multi-level punkter og høydekurver.
     
@@ -77,6 +106,8 @@ def generate_terrain(bbox, crs="EPSG:25833", h_min=100.0, h_max=130.0,
         sec/ter/qua/qui_per_tri: Punkter per trekant på hvert nivå
         sec/ter/qua/qui_delta: Standardavvik for høydevariasjon
         ekvidistanse: Avstand mellom høydekurver
+        min_kurvlengde: Minimum lengde for å beholde en kurve (meter)
+        glatt_iterasjoner: Antall Chaikin-glattingsiterasjoner
     
     Returns:
         dict med keys: all_points, tri5, gdf_pts, gdf_tin, gdf_contours, crs, bbox
@@ -135,6 +166,16 @@ def generate_terrain(bbox, crs="EPSG:25833", h_min=100.0, h_max=130.0,
     # 11) Generer høydekurver
     levels = np.arange(h_min, h_max + ekvidistanse, ekvidistanse)
     lines = generate_contours_from_tin(all_points, tri5.simplices, levels)
+    
+    # 11b) Fjern små kurver og glatt
+    filtered = []
+    for feat in lines:
+        line = feat["geometry"]
+        if line.length < min_kurvlengde:
+            continue
+        feat["geometry"] = _smooth_line(line, iterations=glatt_iterasjoner)
+        filtered.append(feat)
+    lines = filtered
     
     # 12) GeoDataFrames
     gdf_pts = gpd.GeoDataFrame(all_points, columns=["x", "y", "hoyde"],
