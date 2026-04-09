@@ -179,7 +179,7 @@ def create_kommunalveg(all_points, triangles, bbox, segment_length_min=50.0, seg
 
 def generate_private_avkjorsler(kommunale_veger, all_points, triangles, bbox,
                                 all_roads=None,
-                                avstand_fra_ende=50.0, avstand_min=50.0, avstand_max=100.0,
+                                avstand_fra_ende=50.0, avstand_min=70.0, avstand_max=120.0,
                                 lengde_min=10.0, lengde_max=50.0):
     """
     Generer private avkjørsler (korte stikkveger) fra kommunale veger.

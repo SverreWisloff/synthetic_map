@@ -38,20 +38,51 @@ def create_l_shaped_building(width, depth):
     return translate(l_shape, xoff=-cx, yoff=-cy)
 
 
-def create_random_building(size_min=6.0, size_max=30.0):
+def _sample_building_dimensions(size_min, size_max, max_ratio):
+    """Sample lengde og bredde med kontrollert forhold der lengde > bredde."""
+    min_ratio = 1.05
+
+    for _ in range(100):
+        width = np.random.uniform(size_min, size_max)
+        min_length = max(size_min, width * min_ratio)
+        max_length = min(size_max, width * max_ratio * 0.999)
+        if min_length < max_length:
+            length = np.random.uniform(min_length, max_length)
+            return length, width
+
+    width = size_min
+    length = min(size_max, size_min * min(max_ratio * 0.95, 1.2))
+    return length, width
+
+
+def _footprint_ratio(building):
+    """Beregn lengde/bredde-forholdet til bygningens bounding box."""
+    minx, miny, maxx, maxy = building.bounds
+    length = max(maxx - minx, maxy - miny)
+    width = min(maxx - minx, maxy - miny)
+    if width < 1e-9:
+        return float("inf")
+    return length / width
+
+
+def create_random_building(size_min=6.0, size_max=25.0):
     """Lag en tilfeldig bygning (rektangulær eller L-formet) med tilfeldig rotasjon."""
-    width = np.random.uniform(size_min, size_max)
-    depth = np.random.uniform(size_min, min(width * 1.5, size_max))
+    for _ in range(100):
+        if np.random.random() < 0.5:
+            length, width = _sample_building_dimensions(size_min, size_max, max_ratio=2.0)
+            bygning = create_rectangular_building(length, width)
+            bygning_type = "Rektangulær"
+            max_ratio = 2.0
+        else:
+            length, width = _sample_building_dimensions(size_min, size_max, max_ratio=1.5)
+            bygning = create_l_shaped_building(length, width)
+            bygning_type = "L-formet"
+            max_ratio = 1.5
 
-    if np.random.random() < 0.5:
-        bygning = create_rectangular_building(width, depth)
-        bygning_type = "Rektangulær"
-    else:
-        bygning = create_l_shaped_building(width, depth)
-        bygning_type = "L-formet"
-
-    angle = np.random.uniform(0, 360)
-    bygning = rotate(bygning, angle, origin=(0, 0))
+        angle = np.random.uniform(0, 360)
+        bygning = rotate(bygning, angle, origin=(0, 0))
+        if _footprint_ratio(bygning) < max_ratio:
+            return bygning, bygning_type
 
     return bygning, bygning_type
 
@@ -105,12 +136,13 @@ def create_building_group(center_x, center_y, n_buildings=None,
     return buildings
 
 
-def remove_overlapping_buildings(buildings):
+def remove_overlapping_buildings(buildings, min_distance=2.0):
     """
-    Fjern overlappende bygninger: den minste av to som overlapper slettes.
+    Fjern bygninger som overlapper eller ligger for tett: den minste slettes.
 
     Args:
         buildings: list of dicts med "geometry" og andre felter
+        min_distance: minste tillatte avstand mellom bygninger (meter)
 
     Returns:
         filtrert liste av dicts
@@ -122,7 +154,10 @@ def remove_overlapping_buildings(buildings):
     for b in sorted_buildings:
         overlaps = False
         for existing in kept:
-            if b["geometry"].intersects(existing["geometry"]):
+            if (
+                b["geometry"].intersects(existing["geometry"])
+                or b["geometry"].distance(existing["geometry"]) < min_distance
+            ):
                 overlaps = True
                 break
         if not overlaps:
@@ -132,8 +167,9 @@ def remove_overlapping_buildings(buildings):
 
 
 def generate_buildings(gdf_roads, bbox, crs="EPSG:25833",
-                       size_min=6.0, size_max=30.0,
-                       avstand_mellom_bygning=5.0):
+                       size_min=6.0, size_max=25.0,
+                       avstand_mellom_bygning=5.0,
+                       avstand_fra_veg=20.0):
     """
     Generer bygninger ved enden av private avkjørsler.
 
@@ -144,6 +180,7 @@ def generate_buildings(gdf_roads, bbox, crs="EPSG:25833",
         size_min: Minimum bygningsstørrelse (meter)
         size_max: Maksimum bygningsstørrelse (meter)
         avstand_mellom_bygning: Avstand mellom bygninger i en gruppe (meter)
+        avstand_fra_veg: Hvor mye lenger fra vegen gruppesenteret flyttes langs avkjørselen (meter)
 
     Returns:
         GeoDataFrame med bygninger
@@ -159,6 +196,14 @@ def generate_buildings(gdf_roads, bbox, crs="EPSG:25833",
         coords = list(avk.geometry.coords)
         # Endepunktet av avkjørselen (borte fra kommunalvegen)
         end_x, end_y = coords[-1][0], coords[-1][1]
+        prev_x, prev_y = coords[-2][0], coords[-2][1]
+
+        direction_x = end_x - prev_x
+        direction_y = end_y - prev_y
+        direction_length = np.sqrt(direction_x**2 + direction_y**2)
+        if direction_length > 1e-6:
+            end_x += avstand_fra_veg * direction_x / direction_length
+            end_y += avstand_fra_veg * direction_y / direction_length
 
         group = create_building_group(
             end_x, end_y,
@@ -204,8 +249,8 @@ def generate_buildings(gdf_roads, bbox, crs="EPSG:25833",
                 moved_buildings.append(b)
         all_buildings = moved_buildings
 
-    # Fjern overlappende bygninger (minste slettes)
-    all_buildings = remove_overlapping_buildings(all_buildings)
+    # Fjern bygninger som overlapper eller ligger nærmere enn 2 meter (minste slettes)
+    all_buildings = remove_overlapping_buildings(all_buildings, min_distance=2.0)
 
     if not all_buildings:
         return gpd.GeoDataFrame(columns=["geometry", "bygning_type", "avkjorsel"], crs=crs)
