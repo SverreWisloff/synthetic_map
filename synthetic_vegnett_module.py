@@ -495,32 +495,6 @@ def _build_tangent_fillet_candidates(line_point_a, line_dir_a, line_point_b, lin
     return candidates
 
 
-def _build_tangent_fillet(line_point_a, line_dir_a, line_point_b, line_dir_b, radius, num_points=12,
-                          inverse_arc=False, center_side_origin=None, center_side_axis=None,
-                          preferred_center_sign=0.0):
-    """Bygg en sirkelbue som er tangent til to linjer med gitt radius."""
-    candidates = _build_tangent_fillet_candidates(
-        line_point_a,
-        line_dir_a,
-        line_point_b,
-        line_dir_b,
-        radius,
-        num_points=num_points,
-        inverse_arc=inverse_arc,
-        center_side_origin=center_side_origin,
-        center_side_axis=center_side_axis,
-    )
-    if abs(preferred_center_sign) > 0.0:
-        candidates = [
-            candidate for candidate in candidates
-            if candidate["side_value"] is not None and preferred_center_sign * candidate["side_value"] > 1e-9
-        ]
-    if not candidates:
-        return None
-    best_candidate = min(candidates, key=lambda candidate: candidate["length"])
-    return best_candidate["geometry"]
-
-
 def _append_boundary_lines(vegkanter, road, geometry, veg_type, bredde):
     """Legg til boundary-linjer fra en buffergeometri."""
     from shapely.geometry import MultiLineString
@@ -539,14 +513,110 @@ def _append_boundary_lines(vegkanter, road, geometry, veg_type, bredde):
         })
 
 
+def _extract_boundary_lines(geometry):
+    """Hent boundary som liste av linjer."""
+    from shapely.geometry import MultiLineString
+
+    boundary = geometry.boundary
+    if boundary.is_empty:
+        return []
+    return list(boundary.geoms) if isinstance(boundary, MultiLineString) else [boundary]
+
+
+def _split_line_at_point(line, split_point):
+    """Splitt en linje i punktet nærmest split_point."""
+    from shapely.ops import substring
+
+    split_geom = geom.Point(float(split_point[0]), float(split_point[1]))
+    distance_along = line.project(split_geom)
+    if distance_along <= 1e-9 or distance_along >= line.length - 1e-9:
+        return [line]
+
+    first = substring(line, 0.0, distance_along)
+    second = substring(line, distance_along, line.length)
+    parts = []
+    for part in (first, second):
+        if not part.is_empty and len(part.coords) >= 2:
+            parts.append(part)
+    return parts or [line]
+
+
+def _split_boundary_lines_at_points(boundary_lines, split_points, tolerance=1e-3):
+    """Splitt boundary-linjer ved punktene som ligger nærmest de oppgitte split-punktene."""
+    current_lines = list(boundary_lines)
+    for split_point in split_points:
+        split_geom = geom.Point(float(split_point[0]), float(split_point[1]))
+        best_index = None
+        best_distance = float("inf")
+        for index, line in enumerate(current_lines):
+            distance = line.distance(split_geom)
+            if distance < best_distance:
+                best_distance = distance
+                best_index = index
+
+        if best_index is None or best_distance > tolerance:
+            continue
+
+        line = current_lines.pop(best_index)
+        split_parts = _split_line_at_point(line, split_point)
+        current_lines[best_index:best_index] = split_parts
+
+    return current_lines
+
+
+def _get_split_point_near_arc_end(fillet, boundary_lines):
+    """Velg den bue-enden som ligger nærmest stikkvegens vegkant."""
+    if fillet.is_empty or not boundary_lines:
+        return None
+
+    start_point = geom.Point(fillet.coords[0])
+    end_point = geom.Point(fillet.coords[-1])
+    start_distance = min(line.distance(start_point) for line in boundary_lines)
+    end_distance = min(line.distance(end_point) for line in boundary_lines)
+    if start_distance <= end_distance:
+        return np.array(start_point.coords[0])
+    return np.array(end_point.coords[0])
+
+
+def _find_parent_main_road(ep, stikk_idx, stikkveg_type, regler_for_type, gdf_roads):
+    """Finn nærmeste hovedveg for et gitt stikkveg-endepunkt."""
+    ep_point = geom.Point(ep)
+    best_match = None
+    best_distance = float("inf")
+
+    for regel in regler_for_type:
+        hovedveg_type = regel["hovedveg"]
+        hovedveger = gdf_roads[gdf_roads["veg_type"] == hovedveg_type]
+        if hovedveg_type == stikkveg_type:
+            hovedveger = hovedveger[hovedveger.index != stikk_idx]
+
+        for _, main_road in hovedveger.iterrows():
+            distance = main_road.geometry.distance(ep_point)
+            if distance < best_distance:
+                best_distance = distance
+                best_match = {
+                    "main_road": main_road,
+                    "main_type": hovedveg_type,
+                    "regel_kilde": f"{stikkveg_type}<-{hovedveg_type}",
+                }
+
+    if best_match is None or best_distance > 1.0:
+        return None
+    return best_match
+
+
 def _add_t_junction_fillets(vegkanter, side_road, main_roads, main_half_width, side_half_width,
-                            fillet_radius, num_arc, side_type):
+                            fillet_radius, num_arc, side_type, fillet_records=None,
+                            endpoint_pairs=None):
     """Legg til avrundingsbuer for en stikkveg som møter en hovedveg i et T-kryss."""
-    side_coords = list(side_road.geometry.coords)
-    endpoints = [
-        (np.array(side_coords[0]), np.array(side_coords[1])),
-        (np.array(side_coords[-1]), np.array(side_coords[-2])),
-    ]
+    if endpoint_pairs is None:
+        side_coords = list(side_road.geometry.coords)
+        endpoints = [
+            (np.array(side_coords[0]), np.array(side_coords[1])),
+            (np.array(side_coords[-1]), np.array(side_coords[-2])),
+        ]
+    else:
+        endpoints = endpoint_pairs
 
     for ep, next_pt in endpoints:
         ep_point = geom.Point(ep)
@@ -633,6 +703,10 @@ def _add_t_junction_fillets(vegkanter, side_road, main_roads, main_half_width, s
             fillet = candidate["geometry"]
             if fillet.is_empty:
                 continue
+            if fillet_records is not None:
+                fillet_records.append({
+                    "fillet": fillet,
+                })
             vegkanter.append({
                 "geometry": fillet,
                 "veg_type": side_type,
@@ -667,6 +741,9 @@ def generate_vegkant(gdf_roads, crs="EPSG:25833", fillet_radius=4.0):
         {"hovedveg": "KommunalVeg", "stikkveg": "KommunalVeg"},
         {"hovedveg": "KommunalVeg", "stikkveg": "PrivatAvkjørsel"},
     ]
+    regler_per_stikkveg = {}
+    for regel in t_kryss_regler:
+        regler_per_stikkveg.setdefault(regel["stikkveg"], []).append(regel)
 
     road_types = set(gdf_roads["veg_type"].unique())
     stikkvegtyper = {regel["stikkveg"] for regel in t_kryss_regler}
@@ -675,54 +752,101 @@ def generate_vegkant(gdf_roads, crs="EPSG:25833", fillet_radius=4.0):
         bredde = VEGBREDDE.get(veg_type, 4.0)
         for _, road in gdf_roads[gdf_roads["veg_type"] == veg_type].iterrows():
             buffered = road.geometry.buffer(bredde / 2.0, cap_style=2)
-            _append_boundary_lines(vegkanter, road, buffered, veg_type, bredde)
+            _append_boundary_lines(
+                vegkanter,
+                road,
+                buffered,
+                veg_type,
+                bredde,
+            )
 
-    for regel in t_kryss_regler:
-        hovedveg_type = regel["hovedveg"]
-        stikkveg_type = regel["stikkveg"]
-        hovedveger = gdf_roads[gdf_roads["veg_type"] == hovedveg_type]
+    for stikkveg_type in sorted(stikkvegtyper):
+        regler_for_type = regler_per_stikkveg.get(stikkveg_type, [])
         stikkveger = gdf_roads[gdf_roads["veg_type"] == stikkveg_type]
-        if hovedveger.empty or stikkveger.empty:
+        if not regler_for_type or stikkveger.empty:
             continue
 
-        hovedbredde = VEGBREDDE.get(hovedveg_type, 4.0)
         stikkbredde = VEGBREDDE.get(stikkveg_type, 4.0)
-        hoved_half_width = hovedbredde / 2.0
         stikk_half_width = stikkbredde / 2.0
 
         for stikk_idx, stikkveg in stikkveger.iterrows():
-            aktuelle_hovedveger = hovedveger
-            if hovedveg_type == stikkveg_type:
-                aktuelle_hovedveger = hovedveger[hovedveger.index != stikk_idx]
-            if aktuelle_hovedveger.empty:
+            side_coords = list(stikkveg.geometry.coords)
+            endpoint_pairs = [
+                (np.array(side_coords[0]), np.array(side_coords[1])),
+                (np.array(side_coords[-1]), np.array(side_coords[-2])),
+            ]
+            endpoint_matches = []
+            for ep, next_pt in endpoint_pairs:
+                parent_match = _find_parent_main_road(ep, stikk_idx, stikkveg_type, regler_for_type, gdf_roads)
+                if parent_match is None:
+                    continue
+                endpoint_matches.append({
+                    "endpoint": ep,
+                    "next_pt": next_pt,
+                    **parent_match,
+                })
+
+            buffered = stikkveg.geometry.buffer(stikk_half_width, cap_style=2)
+            if not endpoint_matches:
+                _append_boundary_lines(
+                    vegkanter,
+                    stikkveg,
+                    buffered,
+                    stikkveg_type,
+                    stikkbredde,
+                )
                 continue
 
             hovedveg_union = unary_union([
-                road.geometry.buffer(hoved_half_width, cap_style=2)
-                for _, road in aktuelle_hovedveger.iterrows()
+                match["main_road"].geometry.buffer(VEGBREDDE.get(match["main_type"], 4.0) / 2.0, cap_style=2)
+                for match in endpoint_matches
             ])
 
-            buffered = stikkveg.geometry.buffer(stikk_half_width, cap_style=2)
             clipped = buffered.difference(hovedveg_union)
-            if not clipped.is_empty:
-                _append_boundary_lines(vegkanter, stikkveg, clipped, stikkveg_type, stikkbredde)
+            boundary_lines = _extract_boundary_lines(clipped) if not clipped.is_empty else []
+            fillet_records = []
 
-            _add_t_junction_fillets(
-                vegkanter,
-                stikkveg,
-                aktuelle_hovedveger,
-                hoved_half_width,
-                stikk_half_width,
-                fillet_radius,
-                num_arc,
-                stikkveg_type,
-            )
+            for match in endpoint_matches:
+                hoved_half_width = VEGBREDDE.get(match["main_type"], 4.0) / 2.0
+                _add_t_junction_fillets(
+                    vegkanter,
+                    stikkveg,
+                    gpd.GeoDataFrame([match["main_road"]], crs=gdf_roads.crs),
+                    hoved_half_width,
+                    stikk_half_width,
+                    fillet_radius,
+                    num_arc,
+                    stikkveg_type,
+                    fillet_records=fillet_records,
+                    endpoint_pairs=[(match["endpoint"], match["next_pt"])],
+                )
+
+            split_points = [
+                split_point
+                for record in fillet_records
+                for split_point in [_get_split_point_near_arc_end(record["fillet"], boundary_lines)]
+                if split_point is not None
+            ]
+
+            for line in _split_boundary_lines_at_points(boundary_lines, split_points):
+                vegkanter.append({
+                    "geometry": line,
+                    "veg_type": stikkveg_type,
+                    "veg_navn": stikkveg.get("veg_navn", ""),
+                    "vegbredde": stikkbredde,
+                })
 
     dekkede_typar = {regel["hovedveg"] for regel in t_kryss_regler} | stikkvegtyper
     for veg_type in sorted(road_types - dekkede_typar):
         bredde = VEGBREDDE.get(veg_type, 4.0)
         for _, road in gdf_roads[gdf_roads["veg_type"] == veg_type].iterrows():
             buffered = road.geometry.buffer(bredde / 2.0, cap_style=2)
-            _append_boundary_lines(vegkanter, road, buffered, veg_type, bredde)
+            _append_boundary_lines(
+                vegkanter,
+                road,
+                buffered,
+                veg_type,
+                bredde,
+            )
 
     return gpd.GeoDataFrame(vegkanter, crs=crs)
