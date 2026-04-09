@@ -61,11 +61,22 @@ def generate_contours_from_tin(points, triangles, levels):
                 segments.append(geom.LineString(intersections))
         # Slå sammen segmenter til sammenhengende linjer
         if segments:
-            merged = linemerge(unary_union(segments))
-            if merged.geom_type == 'LineString':
-                merged = [merged]
-            elif merged.geom_type == 'MultiLineString':
-                merged = list(merged.geoms)
+            union = unary_union(segments)
+            if union.is_empty:
+                continue
+            if union.geom_type == 'LineString':
+                merged = [union]
+            elif union.geom_type == 'MultiLineString':
+                try:
+                    merged = linemerge(union)
+                    if merged.geom_type == 'LineString':
+                        merged = [merged]
+                    elif merged.geom_type == 'MultiLineString':
+                        merged = list(merged.geoms)
+                    else:
+                        merged = []
+                except ValueError:
+                    merged = list(union.geoms)
             else:
                 merged = []
             for line in merged:

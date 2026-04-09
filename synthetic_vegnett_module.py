@@ -8,29 +8,23 @@ import geopandas as gpd
 import shapely.geometry as geom
 
 
-def interpolate_height_from_tin(x, y, all_points, triangles):
-    """Interpoler høyde basert på TIN ved hjelp av barysentriskekoordinater."""
-    for simplex in triangles:
+def interpolate_height_from_tin(x, y, all_points, tri_delaunay):
+    """Interpoler høyde basert på TIN ved hjelp av Delaunay find_simplex + barysentriske koordinater."""
+    simplex_idx = tri_delaunay.find_simplex(np.array([x, y]))
+    if simplex_idx >= 0:
+        simplex = tri_delaunay.simplices[simplex_idx]
         tri_pts = all_points[simplex]
         v0 = tri_pts[2][:2] - tri_pts[0][:2]
         v1 = tri_pts[1][:2] - tri_pts[0][:2]
         v2 = np.array([x, y]) - tri_pts[0][:2]
-        
-        dot00 = np.dot(v0, v0)
-        dot01 = np.dot(v0, v1)
-        dot02 = np.dot(v0, v2)
-        dot11 = np.dot(v1, v1)
-        dot12 = np.dot(v1, v2)
-        
-        inv_denom = 1 / (dot00 * dot11 - dot01 * dot01) if (dot00 * dot11 - dot01 * dot01) != 0 else 0
-        u = (dot11 * dot02 - dot01 * dot12) * inv_denom
-        v = (dot00 * dot12 - dot01 * dot02) * inv_denom
-        
-        if u >= 0 and v >= 0 and u + v <= 1:
-            w0 = 1 - u - v
-            h = w0 * tri_pts[0][2] + u * tri_pts[2][2] + v * tri_pts[1][2]
+        denom = v0[0] * v1[1] - v0[1] * v1[0]
+        if abs(denom) > 1e-12:
+            u = (v1[1] * v2[0] - v1[0] * v2[1]) / denom
+            v = (v0[0] * v2[1] - v0[1] * v2[0]) / denom
+            w = 1 - u - v
+            h = w * tri_pts[0][2] + u * tri_pts[2][2] + v * tri_pts[1][2]
             return float(h)
-    
+    # Fallback: nærmeste punkt
     distances = np.sqrt((all_points[:, 0] - x)**2 + (all_points[:, 1] - y)**2)
     nearest_idx = np.argmin(distances)
     return float(all_points[nearest_idx][2])
@@ -311,7 +305,7 @@ def generate_roads(terrain_data, crs="EPSG:25833"):
     bbox = terrain_data["bbox"]
     
     # Generer hovedriksveg
-    main_riksveg = create_riksveg(all_points, tri5.simplices, bbox, veg_nummer=1, veg_navn="RiksvegA")
+    main_riksveg = create_riksveg(all_points, tri5, bbox, veg_nummer=1, veg_navn="RiksvegA")
     
     # Generer grenveg fra 25% av hovedriksvegen til nordvesthjørnet
     main_line = main_riksveg["geometry"]
@@ -323,7 +317,7 @@ def generate_roads(terrain_data, crs="EPSG:25833"):
     for attempt in range(50):
         candidate = create_riksveg(
             all_points,
-            tri5.simplices,
+            tri5,
             bbox,
             start=branch_start,
             end=branch_end,
@@ -346,7 +340,7 @@ def generate_roads(terrain_data, crs="EPSG:25833"):
     kommunalveg_a = None
     for attempt in range(50):
         candidate = create_kommunalveg(
-            all_points, tri5.simplices, bbox,
+            all_points, tri5, bbox,
             start=kommunal_start, end=kommunal_end,
             veg_nummer=1, veg_navn="KommunalVegA",
         )
@@ -369,7 +363,7 @@ def generate_roads(terrain_data, crs="EPSG:25833"):
     komm_a_line_geom = kommunalveg_a["geometry"]
     for attempt in range(50):
         candidate = create_kommunalveg(
-            all_points, tri5.simplices, bbox,
+            all_points, tri5, bbox,
             start=kommb_start, end=kommb_end,
             veg_nummer=2, veg_navn="KommunalVegB",
         )
@@ -385,7 +379,7 @@ def generate_roads(terrain_data, crs="EPSG:25833"):
     alle_veger = [main_riksveg, branch_riksveg, kommunalveg_a, kommunalveg_b]
     avkjorsler = generate_private_avkjorsler(
         [kommunalveg_a, kommunalveg_b],
-        all_points, tri5.simplices, bbox,
+        all_points, tri5, bbox,
         all_roads=alle_veger,
     )
 
@@ -403,47 +397,332 @@ VEGBREDDE = {
 }
 
 
-def generate_vegkant(gdf_roads, crs="EPSG:25833"):
+def _unit_vector(vector):
+    """Returner normalisert vektor eller None for nullvektor."""
+    length = np.linalg.norm(vector)
+    if length < 1e-9:
+        return None
+    return vector / length
+
+
+def _line_intersection(point_a, direction_a, point_b, direction_b):
+    """Finn skjæringspunkt mellom to uendelige linjer."""
+    det = direction_a[0] * direction_b[1] - direction_a[1] * direction_b[0]
+    if abs(det) < 1e-9:
+        return None
+    delta = point_b - point_a
+    scale_a = (delta[0] * direction_b[1] - delta[1] * direction_b[0]) / det
+    return point_a + scale_a * direction_a
+
+
+def _build_tangent_fillet_candidates(line_point_a, line_dir_a, line_point_b, line_dir_b, radius, num_points=12,
+                                     inverse_arc=False, center_side_origin=None, center_side_axis=None):
+    """Bygg alle gyldige sirkelbuer som er tangent til to linjer med gitt radius."""
+    dir_a = _unit_vector(line_dir_a)
+    dir_b = _unit_vector(line_dir_b)
+    if dir_a is None or dir_b is None:
+        return []
+
+    intersection = _line_intersection(np.array(line_point_a), dir_a, np.array(line_point_b), dir_b)
+    if intersection is None:
+        return []
+
+    dot_product = float(np.clip(np.dot(dir_a, dir_b), -1.0, 1.0))
+    angle = np.arccos(dot_product)
+    if angle < 1e-3 or abs(np.pi - angle) < 1e-3:
+        return []
+
+    tangent_distance = radius / np.tan(angle / 2.0)
+    tangent_a = intersection + dir_a * tangent_distance
+    tangent_b = intersection + dir_b * tangent_distance
+
+    normal_a = np.array([-dir_a[1], dir_a[0]])
+    normal_b = np.array([-dir_b[1], dir_b[0]])
+
+    candidates = []
+    for sign_a in (-1.0, 1.0):
+        for sign_b in (-1.0, 1.0):
+            candidate_a = tangent_a + sign_a * normal_a * radius
+            candidate_b = tangent_b + sign_b * normal_b * radius
+            error = np.linalg.norm(candidate_a - candidate_b)
+            candidate_center = 0.5 * (candidate_a + candidate_b)
+            if error > 1e-4:
+                continue
+
+            start_angle = np.arctan2(tangent_a[1] - candidate_center[1], tangent_a[0] - candidate_center[0])
+            end_angle = np.arctan2(tangent_b[1] - candidate_center[1], tangent_b[0] - candidate_center[0])
+
+            tangent_ccw = _unit_vector(np.array([
+                -(tangent_a[1] - candidate_center[1]),
+                tangent_a[0] - candidate_center[0],
+            ]))
+            if tangent_ccw is None:
+                continue
+
+            if np.dot(tangent_ccw, dir_a) >= np.dot(-tangent_ccw, dir_a):
+                if end_angle <= start_angle:
+                    end_angle += 2 * np.pi
+            else:
+                if end_angle >= start_angle:
+                    end_angle -= 2 * np.pi
+
+            if inverse_arc:
+                if end_angle > start_angle:
+                    end_angle -= 2 * np.pi
+                else:
+                    end_angle += 2 * np.pi
+
+            angle_span = abs(end_angle - start_angle)
+            point_count = max(num_points, int(np.ceil(angle_span / (np.pi / 12.0))) + 1)
+            angles = np.linspace(start_angle, end_angle, point_count)
+            arc_coords = [
+                (
+                    candidate_center[0] + radius * np.cos(angle_value),
+                    candidate_center[1] + radius * np.sin(angle_value),
+                )
+                for angle_value in angles
+            ]
+            side_value = None
+            if center_side_origin is not None and center_side_axis is not None:
+                side_value = float(np.dot(candidate_center - center_side_origin, center_side_axis))
+            candidates.append({
+                "geometry": geom.LineString(arc_coords),
+                "center": candidate_center,
+                "side_value": side_value,
+                "length": radius * angle_span,
+            })
+
+    return candidates
+
+
+def _build_tangent_fillet(line_point_a, line_dir_a, line_point_b, line_dir_b, radius, num_points=12,
+                          inverse_arc=False, center_side_origin=None, center_side_axis=None,
+                          preferred_center_sign=0.0):
+    """Bygg en sirkelbue som er tangent til to linjer med gitt radius."""
+    candidates = _build_tangent_fillet_candidates(
+        line_point_a,
+        line_dir_a,
+        line_point_b,
+        line_dir_b,
+        radius,
+        num_points=num_points,
+        inverse_arc=inverse_arc,
+        center_side_origin=center_side_origin,
+        center_side_axis=center_side_axis,
+    )
+    if abs(preferred_center_sign) > 0.0:
+        candidates = [
+            candidate for candidate in candidates
+            if candidate["side_value"] is not None and preferred_center_sign * candidate["side_value"] > 1e-9
+        ]
+    if not candidates:
+        return None
+    best_candidate = min(candidates, key=lambda candidate: candidate["length"])
+    return best_candidate["geometry"]
+
+
+def _append_boundary_lines(vegkanter, road, geometry, veg_type, bredde):
+    """Legg til boundary-linjer fra en buffergeometri."""
+    from shapely.geometry import MultiLineString
+
+    boundary = geometry.boundary
+    if boundary.is_empty:
+        return
+
+    lines = list(boundary.geoms) if isinstance(boundary, MultiLineString) else [boundary]
+    for line in lines:
+        vegkanter.append({
+            "geometry": line,
+            "veg_type": veg_type,
+            "veg_navn": road.get("veg_navn", ""),
+            "vegbredde": bredde,
+        })
+
+
+def _add_t_junction_fillets(vegkanter, side_road, main_roads, main_half_width, side_half_width,
+                            fillet_radius, num_arc, side_type):
+    """Legg til avrundingsbuer for en stikkveg som møter en hovedveg i et T-kryss."""
+    side_coords = list(side_road.geometry.coords)
+    endpoints = [
+        (np.array(side_coords[0]), np.array(side_coords[1])),
+        (np.array(side_coords[-1]), np.array(side_coords[-2])),
+    ]
+
+    for ep, next_pt in endpoints:
+        ep_point = geom.Point(ep)
+        parent_main = None
+        min_dist = float("inf")
+        for _, main_road in main_roads.iterrows():
+            dist = main_road.geometry.distance(ep_point)
+            if dist < min_dist:
+                min_dist = dist
+                parent_main = main_road
+
+        if parent_main is None or min_dist > 1.0:
+            continue
+
+        main_line = parent_main.geometry
+        proj_d = main_line.project(ep_point)
+        eps_d = 1.0
+        p_fwd = main_line.interpolate(min(proj_d + eps_d, main_line.length))
+        p_bwd = main_line.interpolate(max(proj_d - eps_d, 0))
+
+        main_axis = _unit_vector(np.array([p_fwd.x - p_bwd.x, p_fwd.y - p_bwd.y]))
+        side_axis = _unit_vector(next_pt - ep)
+        if main_axis is None or side_axis is None:
+            continue
+
+        main_normal = np.array([-main_axis[1], main_axis[0]])
+        if np.dot(side_axis, main_normal) < 0:
+            main_normal = -main_normal
+        main_edge_point = ep + main_normal * main_half_width
+
+        side_normal = np.array([-side_axis[1], side_axis[0]])
+        side_edge_specs = [
+            {"point": ep + side_normal * side_half_width, "side_sign": 1.0},
+            {"point": ep - side_normal * side_half_width, "side_sign": -1.0},
+        ]
+
+        edge_candidates = []
+        for edge_spec in side_edge_specs:
+            side_edge_point = edge_spec["point"]
+            corner_point = _line_intersection(main_edge_point, main_axis, side_edge_point, side_axis)
+            if corner_point is None:
+                continue
+
+            along_main = np.dot(corner_point - ep, main_axis)
+            if abs(along_main) < 1e-6:
+                along_main = np.dot(side_edge_point - ep, main_axis)
+            main_direction = main_axis if along_main >= 0 else -main_axis
+
+            fillet_candidates = _build_tangent_fillet_candidates(
+                main_edge_point,
+                main_direction,
+                side_edge_point,
+                side_axis,
+                fillet_radius,
+                num_points=num_arc,
+                inverse_arc=True,
+                center_side_origin=ep,
+                center_side_axis=side_normal,
+            )
+            side_sign = edge_spec["side_sign"]
+            valid_candidates = [
+                candidate for candidate in fillet_candidates
+                if candidate["side_value"] is not None and side_sign * candidate["side_value"] > 1e-9
+            ]
+            if valid_candidates:
+                edge_candidates.append(valid_candidates)
+
+        chosen_candidates = []
+        if len(edge_candidates) == 2:
+            best_pair = None
+            best_score = float("inf")
+            for candidate_a in edge_candidates[0]:
+                for candidate_b in edge_candidates[1]:
+                    score = abs(candidate_a["length"] - candidate_b["length"])
+                    if score < best_score:
+                        best_score = score
+                        best_pair = (candidate_a, candidate_b)
+            if best_pair is not None:
+                chosen_candidates = list(best_pair)
+        elif len(edge_candidates) == 1:
+            chosen_candidates = [min(edge_candidates[0], key=lambda candidate: candidate["length"])]
+
+        for candidate in chosen_candidates:
+            fillet = candidate["geometry"]
+            if fillet.is_empty:
+                continue
+            vegkanter.append({
+                "geometry": fillet,
+                "veg_type": side_type,
+                "veg_navn": side_road.get("veg_navn", ""),
+                "vegbredde": side_half_width * 2.0,
+            })
+
+
+def generate_vegkant(gdf_roads, crs="EPSG:25833", fillet_radius=4.0):
     """
     Generer vegkanter ved å buffre senterlinjer med halv vegbredde
     og trekke ut venstre og høyre kantlinje.
 
+    T-kryss behandles eksplisitt som hovedveg og stikkveg.
+    Kommunalveg går inn på riksveg som stikkveg, og privat avkjørsel
+    går inn på kommunalveg som stikkveg.
+
     Args:
         gdf_roads: GeoDataFrame med veger (må ha 'veg_type')
         crs: Koordinatsystem
+        fillet_radius: Radius på avrundingsbue ved kryss (meter)
 
     Returns:
         GeoDataFrame med vegkant-linjer
     """
-    from shapely.geometry import MultiLineString
+    from shapely.ops import unary_union
 
     vegkanter = []
+    num_arc = 8
+    t_kryss_regler = [
+        {"hovedveg": "Riksveg", "stikkveg": "KommunalVeg"},
+        {"hovedveg": "KommunalVeg", "stikkveg": "KommunalVeg"},
+        {"hovedveg": "KommunalVeg", "stikkveg": "PrivatAvkjørsel"},
+    ]
 
-    for _, road in gdf_roads.iterrows():
-        veg_type = road["veg_type"]
+    road_types = set(gdf_roads["veg_type"].unique())
+    stikkvegtyper = {regel["stikkveg"] for regel in t_kryss_regler}
+
+    for veg_type in sorted(road_types - stikkvegtyper):
         bredde = VEGBREDDE.get(veg_type, 4.0)
-        buffer_dist = bredde / 2.0
+        for _, road in gdf_roads[gdf_roads["veg_type"] == veg_type].iterrows():
+            buffered = road.geometry.buffer(bredde / 2.0, cap_style=2)
+            _append_boundary_lines(vegkanter, road, buffered, veg_type, bredde)
 
-        # Buffer senterlinjen
-        buffered = road.geometry.buffer(buffer_dist, cap_style=2)  # flat endecap
-
-        # Hent ytre grense som vegkant-linjer
-        boundary = buffered.boundary
-        if boundary.is_empty:
+    for regel in t_kryss_regler:
+        hovedveg_type = regel["hovedveg"]
+        stikkveg_type = regel["stikkveg"]
+        hovedveger = gdf_roads[gdf_roads["veg_type"] == hovedveg_type]
+        stikkveger = gdf_roads[gdf_roads["veg_type"] == stikkveg_type]
+        if hovedveger.empty or stikkveger.empty:
             continue
 
-        # Boundary kan være LineString eller MultiLineString
-        if isinstance(boundary, MultiLineString):
-            lines = list(boundary.geoms)
-        else:
-            lines = [boundary]
+        hovedbredde = VEGBREDDE.get(hovedveg_type, 4.0)
+        stikkbredde = VEGBREDDE.get(stikkveg_type, 4.0)
+        hoved_half_width = hovedbredde / 2.0
+        stikk_half_width = stikkbredde / 2.0
 
-        for line in lines:
-            vegkanter.append({
-                "geometry": line,
-                "veg_type": veg_type,
-                "veg_navn": road.get("veg_navn", ""),
-                "vegbredde": bredde,
-            })
+        for stikk_idx, stikkveg in stikkveger.iterrows():
+            aktuelle_hovedveger = hovedveger
+            if hovedveg_type == stikkveg_type:
+                aktuelle_hovedveger = hovedveger[hovedveger.index != stikk_idx]
+            if aktuelle_hovedveger.empty:
+                continue
+
+            hovedveg_union = unary_union([
+                road.geometry.buffer(hoved_half_width, cap_style=2)
+                for _, road in aktuelle_hovedveger.iterrows()
+            ])
+
+            buffered = stikkveg.geometry.buffer(stikk_half_width, cap_style=2)
+            clipped = buffered.difference(hovedveg_union)
+            if not clipped.is_empty:
+                _append_boundary_lines(vegkanter, stikkveg, clipped, stikkveg_type, stikkbredde)
+
+            _add_t_junction_fillets(
+                vegkanter,
+                stikkveg,
+                aktuelle_hovedveger,
+                hoved_half_width,
+                stikk_half_width,
+                fillet_radius,
+                num_arc,
+                stikkveg_type,
+            )
+
+    dekkede_typar = {regel["hovedveg"] for regel in t_kryss_regler} | stikkvegtyper
+    for veg_type in sorted(road_types - dekkede_typar):
+        bredde = VEGBREDDE.get(veg_type, 4.0)
+        for _, road in gdf_roads[gdf_roads["veg_type"] == veg_type].iterrows():
+            buffered = road.geometry.buffer(bredde / 2.0, cap_style=2)
+            _append_boundary_lines(vegkanter, road, buffered, veg_type, bredde)
 
     return gpd.GeoDataFrame(vegkanter, crs=crs)

@@ -95,6 +95,16 @@ python synthetic_map.py --layers buildings
 python synthetic_map.py --layers terrain,roads
 ```
 
+Avhengigheter mellom lagene er:
+- `terrain`
+- `roads` krever `terrain`
+- `buildings` krever `terrain` og `roads`
+
+Når du velger et lag, kjøres bare dette laget og nødvendige forløpere. Eksempler:
+- `--layers terrain` kjører bare terreng
+- `--layers roads` kjører terreng og veg
+- `--layers buildings` kjører terreng, veg og bygg
+
 **Tilgjengelige lag:**
 - `terrain` - Terrengpunkter, TIN-triangler og høydekurver
 - `roads` - Vegnett og vegkant

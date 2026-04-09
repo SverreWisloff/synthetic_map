@@ -37,6 +37,13 @@ OUTPUT_TERRAIN_GPKG = "synthetic_terrain.gpkg"
 OUTPUT_ROADS_GPKG = "synthetic_vegnett.gpkg"
 OUTPUT_BUILDINGS_GPKG = "synthetic_bygning.gpkg"
 
+LAYER_ORDER = ["terrain", "roads", "buildings"]
+LAYER_DEPENDENCIES = {
+    "terrain": [],
+    "roads": ["terrain"],
+    "buildings": ["terrain", "roads"],
+}
+
 # Terrengparametre
 TERRAIN_CONFIG = {
     "bbox": BBOX,
@@ -64,6 +71,22 @@ TERRAIN_CONFIG = {
 
 # ===== FUNKSJONER =====
 
+def resolve_layers_with_dependencies(layers=None):
+    """Utvid valgte lag med nødvendige avhengigheter i fast rekkefølge."""
+    if layers is None:
+        return list(LAYER_ORDER)
+
+    resolved = set()
+    pending = list(layers)
+    while pending:
+        layer = pending.pop()
+        if layer in resolved:
+            continue
+        resolved.add(layer)
+        pending.extend(LAYER_DEPENDENCIES.get(layer, []))
+
+    return [layer for layer in LAYER_ORDER if layer in resolved]
+
 def generate_all_layers(layers=None):
     """
     Generer valgte kartlag til separate GeoPackage-filer.
@@ -72,12 +95,14 @@ def generate_all_layers(layers=None):
         layers: Liste av lag å generere (['terrain', 'roads'])
                 Hvis None, generer alt
     """
-    if layers is None:
-        layers = ['terrain', 'roads', 'buildings']
+    layers = resolve_layers_with_dependencies(layers)
     
-    # Generer terreng (alltid nødvendig for andre beregninger)
-    print("Genererer terreng...")
-    terrain_data = generate_terrain(**TERRAIN_CONFIG)
+    terrain_data = None
+    gdf_roads = None
+
+    if 'terrain' in layers:
+        print("Genererer terreng...")
+        terrain_data = generate_terrain(**TERRAIN_CONFIG)
     
     # Skriv terreng-layers
     if 'terrain' in layers:
@@ -125,10 +150,6 @@ def generate_all_layers(layers=None):
     # Generer og skriv bygninger
     if 'buildings' in layers:
         print(f"\nGenererer bygninger...")
-        if 'roads' not in layers:
-            print("  (genererer vegnett først...)")
-            gdf_roads = generate_roads(terrain_data, crs=CRS)
-        
         gdf_buildings = generate_buildings(gdf_roads, bbox=BBOX, crs=CRS)
         
         if os.path.exists(OUTPUT_BUILDINGS_GPKG):
@@ -159,21 +180,24 @@ def main():
     
     # Parser lagargument
     if args.layers.lower() == 'all':
-        layers = ['terrain', 'roads', 'buildings']
+        requested_layers = ['terrain', 'roads', 'buildings']
     else:
-        layers = [l.strip().lower() for l in args.layers.split(',')]
+        requested_layers = [l.strip().lower() for l in args.layers.split(',')]
     
     # Valider lagene
     valid_layers = {'terrain', 'roads', 'buildings'}
-    invalid = set(layers) - valid_layers
+    invalid = set(requested_layers) - valid_layers
     if invalid:
         print(f"❌ Feil: ukjente lag: {invalid}")
         print(f"   Tillatte lag: {valid_layers}")
         sys.exit(1)
+
+    layers = resolve_layers_with_dependencies(requested_layers)
     
     print(f"📍 Område: {BBOX}")
     print(f"🗺️  Koordinatsystem: {CRS}")
-    print(f"📊 Genererer lag: {', '.join(layers)}\n")
+    print(f"📊 Valgte lag: {', '.join(requested_layers)}")
+    print(f"🔗 Kjøres i rekkefølge: {', '.join(layers)}\n")
     generate_all_layers(layers)
 
 
