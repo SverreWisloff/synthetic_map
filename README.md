@@ -1,6 +1,6 @@
 # Syntetisk Kartgenerering
 
-Et Python-skript som genererer syntetiske kartlag for terreng, vann, vegnett og bygninger til GeoPackage-format.
+Et Python-skript som genererer syntetiske kartlag for terreng, vann, vegnett, bygninger og AR5 til GeoPackage-format.
 
 ## Eksempel på resultat
 
@@ -14,6 +14,7 @@ Prosjektet er organisert i moduler:
 - `synthetic_vann_module.py` - Generering av innsjøer, bekker og myr
 - `synthetic_vegnett_module.py` - Vegnettgenerering (riksveg, kommunalveg, private avkjørsler, vegkant)
 - `synthetic_bygning_module.py` - Bygningsgenerering
+- `synthetic_ar5_module.py` - Generering av heldekkende AR5-flater
 - `synthetic_hoydekurve.py` - Legacy-versjon (kan slettes)
 
 ## Funksjoner
@@ -73,11 +74,27 @@ Algoritme:
 - Hver bygning får en enkel syntetisk form og størrelse innen definerte intervaller.
 - Kandidater som overlapper veg eller ligger for nær hovedveg, filtreres eller skyves bort for å gi mer realistisk plassering.
 
+### AR5
+
+Modul: `synthetic_ar5_module.py`
+
+GeoPackage: `synthetic_ar5.gpkg`
+- `ar5_areal`: heldekkende polygonflater for AR5-typene `Fulldyrka jord`, `Barskog`, `Bebygd`, `Samferdsel`, `Myr` og `Ferskvann`
+
+Algoritme:
+- AR5 genereres sist og bruker allerede genererte vann-, veg- og bygningsflater som prioriterte kilder i en fast arealrekkefølge.
+- `Myr` hentes fra `Vann-myrgrense`, og `Ferskvann` hentes fra `Vann-innsjokant`.
+- `Samferdsel` bygges ved å buffre alle vegsenterlinjer med vegbredde fra vegparametrene. Alle samferdselsflater slås sammen, og andre AR5-flater klippes bort der de overlapper samferdsel.
+- `Bebygd` bygges ved å buffre bygninger 100 meter, slå sammen nærliggende flater og så klippe dem mot `Myr`, `Ferskvann` og `Samferdsel`.
+- `Fulldyrka jord` hentes fra relativt flate restarealer i terrengmodellen og beholdes bare for flater større enn 20 000 m2.
+- `Barskog` fyller resten av området, slik at AR5 blir heldekkende uten reelle hull eller overlapp.
+- Dersom AR5 endrer geometri for `Myr` eller `Ferskvann`, skrives disse flatene tilbake til vannlaget slik at `synthetic_vann.gpkg` og `synthetic_ar5.gpkg` er konsistente.
+
 ### Orkestrering
 
 Modul: `synthetic_map.py`
 
-- Modulene kjøres i rekkefølgen `terrain`, `water`, `roads`, `buildings`.
+- Modulene kjøres i rekkefølgen `terrain`, `water`, `roads`, `buildings`, `ar5`.
 - Hvert lag skrives til sin egen GeoPackage, slik at kartdataene kan brukes separat i GIS-verktøy.
 - Avhengigheter håndteres automatisk, slik at valg av et senere lag også genererer nødvendige forløpere.
 
@@ -128,6 +145,9 @@ python synthetic_map.py --layers roads
 # Kun bygninger
 python synthetic_map.py --layers buildings
 
+# Alle lag inkludert AR5
+python synthetic_map.py --layers ar5
+
 # Terreng, vann og vegnett
 python synthetic_map.py --layers terrain,water,roads
 ```
@@ -137,23 +157,26 @@ Avhengigheter mellom lagene er:
 - `water` krever `terrain`
 - `roads` krever `terrain`
 - `buildings` krever `terrain` og `roads`
+- `ar5` krever `terrain`, `water`, `roads` og `buildings`
 
 Når du velger et lag, kjøres bare dette laget og nødvendige forløpere. Eksempler:
 - `--layers terrain` kjører bare terreng
 - `--layers water` kjører terreng og vann
 - `--layers roads` kjører terreng og veg
 - `--layers buildings` kjører terreng, veg og bygg
+- `--layers ar5` kjører hele kjeden og avslutter med AR5
 
 **Tilgjengelige lag:**
 - `terrain` - Terrengpunkter, TIN-triangler og høydekurver
 - `water` - Innsjøkant, elv/bekk og myr
 - `roads` - Vegnett og vegkant
 - `buildings` - Bygninger
+- `ar5` - Heldekkende AR5-arealflater
 - `all` - Alt (standardvalg)
 
 ## Output
 
-Skriptet genererer fire GeoPackage-filer:
+Skriptet genererer fem GeoPackage-filer:
 
 **`synthetic_terrain.gpkg`:**
 - `terrain_points`: Genererte høydepunkter
@@ -171,6 +194,9 @@ Skriptet genererer fire GeoPackage-filer:
 
 **`synthetic_bygning.gpkg`:**
 - `bygninger`: Rektangulære og L-formede bygninger
+
+**`synthetic_ar5.gpkg`:**
+- `ar5_areal`: Heldekkende AR5-flater for `Fulldyrka jord`, `Barskog`, `Bebygd`, `Samferdsel`, `Myr` og `Ferskvann`
 
 ## Konfigurasjon
 
@@ -190,6 +216,19 @@ Rediger parametrene i `synthetic_map.py`:
   - `min/max_myr_area`: Minste og største myrareal
   - `max_myr_count`: Maks antall myrflater
   - `myr_merge_distance`: Avstand for sammenslåing av nærliggende myrflater
+- `ROAD_CONFIG`: Parametre for vegsenterlinjer:
+  - `generation_attempts`: Antall forsøk på komplett veggenerering
+  - `main_road`, `branch_road`, `municipal_road_a`, `municipal_road_b`: Kurvatur, segmentlengder og koblingsintervaller per vegtype
+  - `private_driveways`: Avstands- og lengderegler for private avkjørsler
+- `ROAD_EDGE_CONFIG`: Parametre for vegkant og samferdsel:
+  - `road_widths`: Vegbredder brukt både i `vegkant` og AR5-typen `Samferdsel`
+  - `fillet_radius`, `num_arc_points`, `t_junction_rules`: Regler for vegkantgeometri i kryss
+- `AR5_CONFIG`: Parametre for AR5-generering:
+  - `building_buffer`: Buffer rundt bygninger for `Bebygd`
+  - `built_merge_distance`: Sammenbindingsavstand mellom nærliggende bebygde flater
+  - `fulldyrka_max_slope`: Maksimal terrenghelning for kandidater til `Fulldyrka jord`
+  - `fulldyrka_min_area`: Minste areal for `Fulldyrka jord`
+  - `flat_area_smooth_distance`: Glatting av flate terrengområder før jordbruksflater bygges
 
 ## Lisens
 

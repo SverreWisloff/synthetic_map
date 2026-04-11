@@ -1,6 +1,6 @@
 """
 Hovedprogram for syntetisk kartgenerering.
-Genererer terreng, vann, vegnett og bygninger til separate GeoPackage-filer.
+Genererer terreng, vann, vegnett, bygninger og AR5 til separate GeoPackage-filer.
 
 Bruk:
     python synthetic_map.py [--layers LAYER1,LAYER2,...]
@@ -10,6 +10,7 @@ Tilgjengelige lag:
     - water: Vannobjekter (innsjøkant, elv/bekk, myr) → synthetic_vann.gpkg
     - roads: Vegnett (riksveier) → synthetic_vegnett.gpkg
     - buildings: Bygninger → synthetic_bygning.gpkg
+    - ar5: AR5 arealressursflater → synthetic_ar5.gpkg
     - all: Alt (standardvalg)
 
 Eksempler:
@@ -18,12 +19,14 @@ Eksempler:
     python synthetic_map.py --layers water           # Terreng + vann
     python synthetic_map.py --layers roads           # Terreng + vegnett
     python synthetic_map.py --layers buildings       # Terreng + vegnett + bygninger
+    python synthetic_map.py --layers ar5             # Alle lag + AR5
 """
 
 import argparse
 import os
 import sys
 
+from synthetic_ar5_module import generate_ar5
 from synthetic_bygning_module import generate_buildings
 from synthetic_hoydekurve_module import generate_terrain
 from synthetic_vann_module import generate_water
@@ -40,13 +43,15 @@ OUTPUT_TERRAIN_GPKG = "synthetic_terrain.gpkg"
 OUTPUT_WATER_GPKG = "synthetic_vann.gpkg"
 OUTPUT_ROADS_GPKG = "synthetic_vegnett.gpkg"
 OUTPUT_BUILDINGS_GPKG = "synthetic_bygning.gpkg"
+OUTPUT_AR5_GPKG = "synthetic_ar5.gpkg"
 
-LAYER_ORDER = ["terrain", "water", "roads", "buildings"]
+LAYER_ORDER = ["terrain", "water", "roads", "buildings", "ar5"]
 LAYER_DEPENDENCIES = {
     "terrain": [],
     "water": ["terrain"],
     "roads": ["terrain"],
     "buildings": ["terrain", "roads"],
+    "ar5": ["terrain", "water", "roads", "buildings"],
 }
 
 TERRAIN_CONFIG = {
@@ -156,6 +161,17 @@ ROAD_EDGE_CONFIG = {
     ],
 }
 
+AR5_CONFIG = {
+    "crs": CRS,
+    "bbox": BBOX,
+    "road_widths": ROAD_EDGE_CONFIG["road_widths"],
+    "building_buffer": 100.0,
+    "built_merge_distance": 20.0,
+    "fulldyrka_max_slope": 4.0,
+    "fulldyrka_min_area": 20000.0,
+    "flat_area_smooth_distance": 4.0,
+}
+
 
 def resolve_layers_with_dependencies(layers=None):
     """Utvid valgte lag med nødvendige avhengigheter i fast rekkefølge."""
@@ -179,7 +195,9 @@ def generate_all_layers(layers=None):
     layers = resolve_layers_with_dependencies(layers)
 
     terrain_data = None
+    water_data = None
     gdf_roads = None
+    gdf_buildings = None
 
     if "terrain" in layers:
         print("Genererer terreng...")
@@ -292,6 +310,40 @@ def generate_all_layers(layers=None):
             for btype, count in gdf_buildings["bygning_type"].value_counts().items():
                 print(f"  {btype}: {count}")
 
+    if "ar5" in layers:
+        print("\nGenererer AR5...")
+        ar5_data = generate_ar5(
+            terrain_data,
+            water_data,
+            gdf_roads,
+            gdf_buildings,
+            **AR5_CONFIG,
+        )
+
+        if os.path.exists(OUTPUT_AR5_GPKG):
+            os.remove(OUTPUT_AR5_GPKG)
+
+        ar5_data["gdf_ar5"].to_file(OUTPUT_AR5_GPKG, layer="ar5_areal", driver="GPKG")
+        print(f"Skrevet til {OUTPUT_AR5_GPKG}")
+        print("  ✓ ar5_areal")
+
+        # AR5 er siste prioriterte arealdekning. Dersom myr eller ferskvann ble klippet eller slått sammen
+        # her, skrives de oppdaterte flatene tilbake til vannbasen for å holde datasettene konsistente.
+        water_data["gdf_innsjokant"] = ar5_data["gdf_innsjokant"]
+        water_data["gdf_myrgrense"] = ar5_data["gdf_myrgrense"]
+        if os.path.exists(OUTPUT_WATER_GPKG):
+            os.remove(OUTPUT_WATER_GPKG)
+        water_data["gdf_innsjokant"].to_file(OUTPUT_WATER_GPKG, layer="innsjokant", driver="GPKG")
+        water_data["gdf_elvbekk"].to_file(OUTPUT_WATER_GPKG, layer="elvbekk", driver="GPKG")
+        water_data["gdf_myrgrense"].to_file(OUTPUT_WATER_GPKG, layer="myrgrense", driver="GPKG")
+        print(f"  ✓ oppdatert {OUTPUT_WATER_GPKG}")
+
+        print(f"\nAR5-statistikk ({OUTPUT_AR5_GPKG}):")
+        print(f"  Flater totalt: {len(ar5_data['gdf_ar5'])}")
+        for ar5_type, count in ar5_data["gdf_ar5"]["ar5_type"].value_counts().items():
+            print(f"  {ar5_type}: {count}")
+        print(f"  Arealdekning: {ar5_data['total_area'] - ar5_data['uncovered_area']:.1f} / {ar5_data['total_area']:.1f} m2")
+
     print("\n✅ Kartgenerering fullført")
 
 
@@ -306,11 +358,11 @@ def main():
     args = parser.parse_args()
 
     if args.layers.lower() == "all":
-        requested_layers = ["terrain", "water", "roads", "buildings"]
+        requested_layers = ["terrain", "water", "roads", "buildings", "ar5"]
     else:
         requested_layers = [layer.strip().lower() for layer in args.layers.split(",")]
 
-    valid_layers = {"terrain", "water", "roads", "buildings"}
+    valid_layers = {"terrain", "water", "roads", "buildings", "ar5"}
     invalid = set(requested_layers) - valid_layers
     if invalid:
         print(f"❌ Feil: ukjente lag: {invalid}")
