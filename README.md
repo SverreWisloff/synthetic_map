@@ -15,7 +15,6 @@ Prosjektet er organisert i moduler:
 - `synthetic_vegnett_module.py` - Vegnettgenerering (riksveg, kommunalveg, private avkjørsler, vegkant)
 - `synthetic_bygning_module.py` - Bygningsgenerering
 - `synthetic_ar5_module.py` - Generering av heldekkende AR5-flater
-- `synthetic_hoydekurve.py` - Legacy-versjon (kan slettes)
 
 ## Funksjoner
 
