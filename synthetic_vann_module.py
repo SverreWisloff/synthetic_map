@@ -125,6 +125,7 @@ def _build_triangle_data(all_points, tri5):
         "polygons": polygons,
         "boundary_touch": boundary_touch,
         "all_points": all_points,
+        "exit_points": None,
     }
 
 
@@ -170,6 +171,9 @@ def _compute_flow_directions(tri_data):
         exit_edges[idx] = best_edge_idx
         downstream[idx] = neighbors[idx][best_edge_idx]
 
+    # Lagre fasett-utløpet per triangel slik at senere bekkesporing kan starte fra faktisk
+    # inngangspunkt i triangelet og følge lokal fallinje ut igjen, ikke bare sentrum-til-sentrum.
+    tri_data["exit_points"] = exit_points
     sinks = downstream == -1
     return downstream, sinks, exit_points, exit_edges
 
@@ -239,6 +243,56 @@ def _nearest_boundary_coordinate(polygon, coordinate):
     return (float(point.x), float(point.y))
 
 
+def _project_coordinate_to_triangle(tri_idx, coordinate, tri_data):
+    """Flytt et koordinat til nærmeste punkt på eller i et triangel."""
+    polygon = tri_data["polygons"][tri_idx]
+    point = Point(coordinate)
+    if polygon.contains(point) or polygon.touches(point):
+        return (float(point.x), float(point.y))
+
+    boundary = polygon.boundary
+    projected = boundary.interpolate(boundary.project(point))
+    return (float(projected.x), float(projected.y))
+
+
+def _triangle_flow_exit_coordinate(tri_idx, start_coordinate, tri_data, epsilon=1e-6):
+    """Finn utløpspunkt for lokal fallinje fra et startpunkt inne i et triangel."""
+    direction = tri_data["downhill_vectors"][tri_idx]
+    direction_norm = float(np.linalg.norm(direction))
+    if direction_norm <= 1e-12:
+        return None
+
+    direction = direction / direction_norm
+    simplex = tri_data["simplices"][tri_idx]
+    triangle_xy = tri_data["all_points"][simplex][:, :2]
+    origin = np.array(start_coordinate, dtype=float) + direction * epsilon
+    edge_pairs = [(1, 2), (2, 0), (0, 1)]
+
+    best_hit = None
+    for start_idx, end_idx in edge_pairs:
+        hit = _ray_segment_intersection(origin, direction, triangle_xy[start_idx], triangle_xy[end_idx], epsilon=epsilon)
+        if hit is None:
+            continue
+        hit_t, intersection = hit
+        if best_hit is not None and hit_t >= best_hit[0]:
+            continue
+        best_hit = (hit_t, intersection)
+
+    if best_hit is None:
+        # Fallback til det forhåndsberegnede utløpspunktet fra triangelets sentrum hvis lokal
+        # strålesporing ikke treffer kanten robust nok nær et hjørne eller en kant.
+        exit_points = tri_data.get("exit_points")
+        if exit_points is None:
+            return None
+        fallback = exit_points[tri_idx]
+        if not np.all(np.isfinite(fallback)):
+            return None
+        return (float(fallback[0]), float(fallback[1]))
+
+    intersection = best_hit[1]
+    return (float(intersection[0]), float(intersection[1]))
+
+
 def _extract_coordinate_candidates(geometry):
     """Trekk ut punktkandidater fra vilkårlig skjæringsgeometri."""
     if geometry is None or geometry.is_empty:
@@ -299,13 +353,46 @@ def _line_directness_ratio(line):
     return float(line.length / direct_distance)
 
 
+def _line_max_offset_ratio(line):
+    """Største sideveis avvik fra direkte linje, relativt til endepunktsavstanden."""
+    coords = list(line.coords)
+    if len(coords) < 3:
+        return 0.0
+
+    start = np.array(coords[0], dtype=float)
+    end = np.array(coords[-1], dtype=float)
+    baseline = end - start
+    baseline_length = float(np.linalg.norm(baseline))
+    if baseline_length <= 1e-9:
+        return 0.0
+
+    max_offset = 0.0
+    for coord in coords[1:-1]:
+        point = np.array(coord, dtype=float)
+        offset = abs(_cross_2d(baseline, point - start)) / baseline_length
+        max_offset = max(max_offset, float(offset))
+    return max_offset / baseline_length
+
+
+def _stream_needs_meander(line, min_directness_ratio=1.08, min_offset_ratio=0.035, min_vertices=10):
+    """Vurder om en bekkelinje fortsatt er for rett til å se naturlig ut."""
+    if line.is_empty:
+        return False
+    coords = list(line.coords)
+    if len(coords) < min_vertices:
+        return True
+    if _line_directness_ratio(line) < min_directness_ratio:
+        return True
+    return _line_max_offset_ratio(line) < min_offset_ratio
+
+
 def _bend_straight_stream(line, amplitude_scale=0.02):
     """Legg inn svak kurvatur i nesten rette bekkelinjer."""
     if line.is_empty:
         return line
 
     coords = list(line.coords)
-    if len(coords) >= 8 and _line_directness_ratio(line) >= 1.06:
+    if not _stream_needs_meander(line):
         return line
 
     start = np.array(coords[0], dtype=float)
@@ -322,7 +409,7 @@ def _bend_straight_stream(line, amplitude_scale=0.02):
 
     def build_bent_line(scale_multiplier, offset_pattern):
         amplitude = max(4.0, min(60.0, direction_norm * amplitude_scale * scale_multiplier))
-        fractions = [0.18, 0.38, 0.62, 0.82]
+        fractions = [0.14, 0.30, 0.48, 0.66, 0.84]
         bent_coords = [tuple(start)]
         for fraction, offset_factor in zip(fractions, offset_pattern):
             base_point = start + direction * fraction
@@ -339,21 +426,24 @@ def _bend_straight_stream(line, amplitude_scale=0.02):
             coords.append((float(point[0]), float(point[1])))
         return LineString(coords)
 
-    bent_line = build_bent_line(1.0, [0.55, 1.0, -0.8, -0.35])
+    bent_line = build_bent_line(1.4, [0.45, 1.0, 0.25, -0.9, -0.4])
     if not bent_line.is_valid or bent_line.length <= 0:
         return line
-    if _line_directness_ratio(bent_line) >= 1.03:
+    if not _stream_needs_meander(bent_line):
         return bent_line
 
-    stronger_line = build_bent_line(4.5, [0.45, 1.1, 1.15, 0.35])
-    if stronger_line.is_valid and stronger_line.length > 0:
-        if _line_directness_ratio(stronger_line) >= 1.03:
-            return stronger_line
+    stronger_line = build_bent_line(3.2, [0.6, 1.3, 0.5, -1.25, -0.55])
+    if stronger_line.is_valid and stronger_line.length > 0 and not _stream_needs_meander(stronger_line):
+        return stronger_line
 
-    arc_line = build_arc_line(min(90.0, direction_norm * 0.16))
-    if arc_line.is_valid and arc_line.length > 0:
+    strongest_line = build_bent_line(4.6, [0.75, 1.55, 0.7, -1.45, -0.7])
+    if strongest_line.is_valid and strongest_line.length > 0 and not _stream_needs_meander(strongest_line):
+        return strongest_line
+
+    arc_line = build_arc_line(min(120.0, direction_norm * 0.22))
+    if arc_line.is_valid and arc_line.length > 0 and not _stream_needs_meander(arc_line, min_vertices=8):
         return arc_line
-    return bent_line
+    return strongest_line if strongest_line.is_valid and strongest_line.length > 0 else bent_line
 
 
 def _prepare_line_for_bend(line, min_length, max_length, keep_end=False):
@@ -370,9 +460,11 @@ def _prepare_line_for_bend(line, min_length, max_length, keep_end=False):
 
 def _trace_inlet_stream(start_idx, lake_geometry, lake_triangles, tri_data, downstream, exit_points):
     """Tracer en nedstrøms linje som ender ved innsjøgrensen."""
-    coords = [tuple(tri_data["centroids"][start_idx])]
+    start_coordinate = tuple(tri_data["centroids"][start_idx])
+    coords = [start_coordinate]
     visited = set()
     current = int(start_idx)
+    current_coordinate = start_coordinate
     end_height = None
 
     while current not in visited:
@@ -381,22 +473,25 @@ def _trace_inlet_stream(start_idx, lake_geometry, lake_triangles, tri_data, down
         if next_idx < 0:
             return None
 
-        next_centroid = tuple(tri_data["centroids"][next_idx])
+        # Følg vannvegen gjennom hvert triangel fra faktisk innløpspunkt til lokal utløpskant.
+        exit_coordinate = _triangle_flow_exit_coordinate(current, current_coordinate, tri_data)
+        if exit_coordinate is None:
+            current_exit = exit_points[current]
+            if not np.all(np.isfinite(current_exit)):
+                return None
+            exit_coordinate = tuple(float(value) for value in current_exit)
+
         if next_idx in lake_triangles:
-            boundary_coordinate = _segment_boundary_coordinate(lake_geometry, coords[-1], next_centroid)
+            boundary_coordinate = _segment_boundary_coordinate(lake_geometry, coords[-1], exit_coordinate)
             if coords[-1] != boundary_coordinate:
                 coords.append(boundary_coordinate)
             end_height = float(tri_data["centroid_heights"][next_idx])
             break
 
-        current_exit = exit_points[current]
-        if np.all(np.isfinite(current_exit)):
-            exit_coordinate = tuple(float(value) for value in current_exit)
-            if coords[-1] != exit_coordinate:
-                coords.append(exit_coordinate)
-        if coords[-1] != next_centroid:
-            coords.append(next_centroid)
+        if coords[-1] != exit_coordinate:
+            coords.append(exit_coordinate)
         current = next_idx
+        current_coordinate = exit_coordinate
 
     if len(coords) < 2:
         return None
@@ -414,21 +509,23 @@ def _trace_outlet_stream(
     exit_points,
 ):
     """Tracer en utløpslinje fra nærmeste innsjøgrense og nedstrøms ut av innsjøen."""
-    start_coordinate = _nearest_boundary_coordinate(lake_geometry, tuple(tri_data["centroids"][start_idx]))
+    boundary_coordinate = _nearest_boundary_coordinate(lake_geometry, tuple(tri_data["centroids"][start_idx]))
+    # Utløpet starter på innsjøgrensen, men projiseres inn på første triangel før videre tracing.
+    start_coordinate = _project_coordinate_to_triangle(start_idx, boundary_coordinate, tri_data)
     coords = [start_coordinate]
-    start_centroid = tuple(tri_data["centroids"][start_idx])
-    if coords[-1] != start_centroid:
-        coords.append(start_centroid)
 
     current = int(start_idx)
+    current_coordinate = start_coordinate
     visited = set()
     while current not in visited:
         visited.add(current)
-        current_exit = exit_points[current]
-        if np.all(np.isfinite(current_exit)):
-            exit_coordinate = tuple(float(value) for value in current_exit)
-            if coords[-1] != exit_coordinate:
-                coords.append(exit_coordinate)
+        exit_coordinate = _triangle_flow_exit_coordinate(current, current_coordinate, tri_data)
+        if exit_coordinate is None:
+            current_exit = exit_points[current]
+            if np.all(np.isfinite(current_exit)):
+                exit_coordinate = tuple(float(value) for value in current_exit)
+        if exit_coordinate is not None and coords[-1] != exit_coordinate:
+            coords.append(exit_coordinate)
 
         next_idx = int(downstream[current])
         if next_idx < 0:
@@ -437,11 +534,8 @@ def _trace_outlet_stream(
             break
         if lake_owner[next_idx] >= 0 and lake_owner[next_idx] != lake_id:
             break
-
-        next_centroid = tuple(tri_data["centroids"][next_idx])
-        if coords[-1] != next_centroid:
-            coords.append(next_centroid)
         current = next_idx
+        current_coordinate = tuple(tri_data["centroids"][current]) if exit_coordinate is None else exit_coordinate
 
     if len(coords) < 2:
         return None
@@ -529,6 +623,8 @@ def _pick_inlet_streams_for_lake(
         if line is None:
             continue
         line = _bend_straight_stream(line)
+        if _stream_needs_meander(line):
+            line = _bend_straight_stream(line, amplitude_scale=0.03)
         line = _trim_line_to_length_range(line, min_length, max_length, keep_end=True)
         if line is None:
             continue
@@ -658,6 +754,8 @@ def _pick_outlet_stream_for_lake(
         if line is None:
             continue
         line = _bend_straight_stream(line)
+        if _stream_needs_meander(line):
+            line = _bend_straight_stream(line, amplitude_scale=0.03)
         line = _trim_line_to_length_range(line, min_length, max_length, keep_end=False)
         if line is None:
             continue
