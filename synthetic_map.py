@@ -88,6 +88,10 @@ WATER_CONFIG = {
     "polygon_smooth_distance": 4.0,
 }
 
+ROAD_CONFIG = {
+    "generation_attempts": 8,
+}
+
 
 def resolve_layers_with_dependencies(layers=None):
     """Utvid valgte lag med nødvendige avhengigheter i fast rekkefølge."""
@@ -159,7 +163,21 @@ def generate_all_layers(layers=None):
 
     if "roads" in layers:
         print("\nGenererer vegnett...")
-        gdf_roads = generate_roads(terrain_data, crs=CRS)
+        road_error = None
+        for attempt in range(1, ROAD_CONFIG["generation_attempts"] + 1):
+            try:
+                gdf_roads = generate_roads(terrain_data, crs=CRS)
+                road_error = None
+                break
+            except RuntimeError as error:
+                road_error = error
+                if attempt == ROAD_CONFIG["generation_attempts"]:
+                    raise
+                print(f"  Forsøk {attempt}/{ROAD_CONFIG['generation_attempts']} mislyktes: {error}")
+                print("  Prøver veggenerering på nytt...")
+
+        if road_error is not None:
+            raise road_error
 
         if os.path.exists(OUTPUT_ROADS_GPKG):
             os.remove(OUTPUT_ROADS_GPKG)
