@@ -8,6 +8,88 @@ import geopandas as gpd
 import shapely.geometry as geom
 
 
+DEFAULT_MAIN_ROAD_CONFIG = {
+    "segment_length_min": 100.0,
+    "segment_length_max": 200.0,
+    "radius_min": 150.0,
+    "radius_max": 250.0,
+    "point_density": 0.2,
+    "max_attempts": 20,
+}
+
+DEFAULT_BRANCH_ROAD_CONFIG = {
+    "attach_fraction": (0.22, 0.30),
+    "end_offset": (18.0, 28.0),
+    "candidate_attempts": 50,
+    "segment_length_min": 100.0,
+    "segment_length_max": 200.0,
+    "radius_min": 150.0,
+    "radius_max": 250.0,
+    "point_density": 0.2,
+    "max_attempts": 20,
+}
+
+DEFAULT_MUNICIPAL_ROAD_A_CONFIG = {
+    "attach_fraction_main": (0.44, 0.56),
+    "end_fraction_x": (0.42, 0.58),
+    "end_offset": (18.0, 28.0),
+    "candidate_attempts": 50,
+    "segment_length_min": 50.0,
+    "segment_length_max": 100.0,
+    "radius_min": 70.0,
+    "radius_max": 100.0,
+    "point_density": 0.2,
+    "max_attempts": 20,
+}
+
+DEFAULT_MUNICIPAL_ROAD_B_CONFIG = {
+    "attach_fraction_municipal_a": (0.20, 0.32),
+    "attach_fraction_branch": (0.20, 0.32),
+    "candidate_attempts": 50,
+    "segment_length_min": 50.0,
+    "segment_length_max": 100.0,
+    "radius_min": 70.0,
+    "radius_max": 100.0,
+    "point_density": 0.2,
+    "max_attempts": 20,
+}
+
+DEFAULT_PRIVATE_DRIVEWAY_CONFIG = {
+    "avstand_fra_ende": 50.0,
+    "avstand_min": 70.0,
+    "avstand_max": 120.0,
+    "lengde_min": 10.0,
+    "lengde_max": 50.0,
+}
+
+DEFAULT_ROAD_WIDTHS = {
+    "Riksveg": 10.0,
+    "KommunalVeg": 5.0,
+    "PrivatAvkjørsel": 4.0,
+}
+
+DEFAULT_T_JUNCTION_RULES = [
+    {"hovedveg": "Riksveg", "stikkveg": "KommunalVeg"},
+    {"hovedveg": "KommunalVeg", "stikkveg": "KommunalVeg"},
+    {"hovedveg": "KommunalVeg", "stikkveg": "PrivatAvkjørsel"},
+]
+
+
+def _merge_config(defaults, overrides=None):
+    """Lag en kopi av defaults og overskriv med eventuelle brukerparametre."""
+    if overrides is None:
+        return dict(defaults)
+    return {**defaults, **overrides}
+
+
+def _resolve_randomized_value(value):
+    """Returner fast verdi eller trekk tilfeldig fra et intervall."""
+    if isinstance(value, (tuple, list)) and len(value) == 2:
+        low, high = value
+        return float(np.random.uniform(low, high))
+    return value
+
+
 def interpolate_height_from_tin(x, y, all_points, tri_delaunay):
     """Interpoler høyde basert på TIN ved hjelp av Delaunay find_simplex + barysentriske koordinater."""
     simplex_idx = tri_delaunay.find_simplex(np.array([x, y]))
@@ -289,7 +371,15 @@ def generate_private_avkjorsler(kommunale_veger, all_points, triangles, bbox,
     return avkjorsler
 
 
-def generate_roads(terrain_data, crs="EPSG:25833"):
+def generate_roads(
+    terrain_data,
+    crs="EPSG:25833",
+    main_road_config=None,
+    branch_road_config=None,
+    municipal_road_a_config=None,
+    municipal_road_b_config=None,
+    private_driveway_config=None,
+):
     """
     Generer riksvegnettet basert på terrengdata.
     
@@ -304,21 +394,53 @@ def generate_roads(terrain_data, crs="EPSG:25833"):
     tri5 = terrain_data["tri5"]
     bbox = terrain_data["bbox"]
     
+    main_road_config = _merge_config(DEFAULT_MAIN_ROAD_CONFIG, main_road_config)
+    branch_road_config = _merge_config(DEFAULT_BRANCH_ROAD_CONFIG, branch_road_config)
+    municipal_road_a_config = _merge_config(DEFAULT_MUNICIPAL_ROAD_A_CONFIG, municipal_road_a_config)
+    municipal_road_b_config = _merge_config(DEFAULT_MUNICIPAL_ROAD_B_CONFIG, municipal_road_b_config)
+    private_driveway_config = _merge_config(DEFAULT_PRIVATE_DRIVEWAY_CONFIG, private_driveway_config)
+
+    branch_attach_fraction = _resolve_randomized_value(branch_road_config["attach_fraction"])
+    branch_end_offset = _resolve_randomized_value(branch_road_config["end_offset"])
+    municipal_a_attach_fraction = _resolve_randomized_value(municipal_road_a_config["attach_fraction_main"])
+    municipal_a_end_fraction_x = _resolve_randomized_value(municipal_road_a_config["end_fraction_x"])
+    municipal_a_end_offset = _resolve_randomized_value(municipal_road_a_config["end_offset"])
+    municipal_b_attach_fraction_a = _resolve_randomized_value(municipal_road_b_config["attach_fraction_municipal_a"])
+    municipal_b_attach_fraction_branch = _resolve_randomized_value(municipal_road_b_config["attach_fraction_branch"])
+
     # Generer hovedriksveg
-    main_riksveg = create_riksveg(all_points, tri5, bbox, veg_nummer=1, veg_navn="RiksvegA")
+    main_riksveg = create_riksveg(
+        all_points,
+        tri5,
+        bbox,
+        segment_length_min=main_road_config["segment_length_min"],
+        segment_length_max=main_road_config["segment_length_max"],
+        radius_min=main_road_config["radius_min"],
+        radius_max=main_road_config["radius_max"],
+        point_density=main_road_config["point_density"],
+        max_attempts=main_road_config["max_attempts"],
+        veg_nummer=1,
+        veg_navn="RiksvegA",
+    )
     
-    # Generer grenveg fra 25% av hovedriksvegen til nordvesthjørnet
+    # Generer grenveg fra valgt andel av hovedriksvegen til nordvesthjørnet
     main_line = main_riksveg["geometry"]
-    branch_point = main_line.interpolate(main_line.length * 0.25)
+    branch_point = main_line.interpolate(main_line.length * branch_attach_fraction)
     branch_start = (branch_point.x, branch_point.y)
-    branch_end = np.array((bbox[0] + 20.0, bbox[3] - 20.0))
+    branch_end = np.array((bbox[0] + branch_end_offset, bbox[3] - branch_end_offset))
     
     branch_riksveg = None
-    for attempt in range(50):
+    for attempt in range(branch_road_config["candidate_attempts"]):
         candidate = create_riksveg(
             all_points,
             tri5,
             bbox,
+            segment_length_min=branch_road_config["segment_length_min"],
+            segment_length_max=branch_road_config["segment_length_max"],
+            radius_min=branch_road_config["radius_min"],
+            radius_max=branch_road_config["radius_max"],
+            point_density=branch_road_config["point_density"],
+            max_attempts=branch_road_config["max_attempts"],
             start=branch_start,
             end=branch_end,
             veg_nummer=2,
@@ -331,17 +453,29 @@ def generate_roads(terrain_data, crs="EPSG:25833"):
     if branch_riksveg is None:
         raise RuntimeError("Klarte ikke generere en sekundær riksveg uten krysning")
 
-    # Generer KommunalVegA fra midt på RiksvegA til midten av nordkanten
-    kommunal_start_pt = main_line.interpolate(main_line.length * 0.5)
+    # Generer KommunalVegA fra valgt punkt på RiksvegA til nordkanten
+    kommunal_start_pt = main_line.interpolate(main_line.length * municipal_a_attach_fraction)
     kommunal_start = (kommunal_start_pt.x, kommunal_start_pt.y)
-    kommunal_end = ((bbox[0] + bbox[2]) * 0.5, bbox[3] - 20.0)
+    kommunal_end = (
+        bbox[0] + (bbox[2] - bbox[0]) * municipal_a_end_fraction_x,
+        bbox[3] - municipal_a_end_offset,
+    )
 
     branch_line = branch_riksveg["geometry"]
     kommunalveg_a = None
-    for attempt in range(50):
+    for attempt in range(municipal_road_a_config["candidate_attempts"]):
         candidate = create_kommunalveg(
-            all_points, tri5, bbox,
-            start=kommunal_start, end=kommunal_end,
+            all_points,
+            tri5,
+            bbox,
+            segment_length_min=municipal_road_a_config["segment_length_min"],
+            segment_length_max=municipal_road_a_config["segment_length_max"],
+            radius_min=municipal_road_a_config["radius_min"],
+            radius_max=municipal_road_a_config["radius_max"],
+            point_density=municipal_road_a_config["point_density"],
+            max_attempts=municipal_road_a_config["max_attempts"],
+            start=kommunal_start,
+            end=kommunal_end,
             veg_nummer=1, veg_navn="KommunalVegA",
         )
         cline = candidate["geometry"]
@@ -352,19 +486,28 @@ def generate_roads(terrain_data, crs="EPSG:25833"):
     if kommunalveg_a is None:
         raise RuntimeError("Klarte ikke generere KommunalVegA uten krysning")
 
-    # Generer KommunalVegB fra 20% ut på KommunalVegA til 20% ut på RiksvegB
+    # Generer KommunalVegB mellom valgte punkter på KommunalVegA og RiksvegB
     komm_a_line = kommunalveg_a["geometry"]
-    kommb_start_pt = komm_a_line.interpolate(komm_a_line.length * 0.25)
-    kommb_end_pt = branch_line.interpolate(branch_line.length * 0.25)
+    kommb_start_pt = komm_a_line.interpolate(komm_a_line.length * municipal_b_attach_fraction_a)
+    kommb_end_pt = branch_line.interpolate(branch_line.length * municipal_b_attach_fraction_branch)
     kommb_start = (kommb_start_pt.x, kommb_start_pt.y)
     kommb_end = (kommb_end_pt.x, kommb_end_pt.y)
 
     kommunalveg_b = None
     komm_a_line_geom = kommunalveg_a["geometry"]
-    for attempt in range(50):
+    for attempt in range(municipal_road_b_config["candidate_attempts"]):
         candidate = create_kommunalveg(
-            all_points, tri5, bbox,
-            start=kommb_start, end=kommb_end,
+            all_points,
+            tri5,
+            bbox,
+            segment_length_min=municipal_road_b_config["segment_length_min"],
+            segment_length_max=municipal_road_b_config["segment_length_max"],
+            radius_min=municipal_road_b_config["radius_min"],
+            radius_max=municipal_road_b_config["radius_max"],
+            point_density=municipal_road_b_config["point_density"],
+            max_attempts=municipal_road_b_config["max_attempts"],
+            start=kommb_start,
+            end=kommb_end,
             veg_nummer=2, veg_navn="KommunalVegB",
         )
         cline = candidate["geometry"]
@@ -381,20 +524,17 @@ def generate_roads(terrain_data, crs="EPSG:25833"):
         [kommunalveg_a, kommunalveg_b],
         all_points, tri5, bbox,
         all_roads=alle_veger,
+        avstand_fra_ende=private_driveway_config["avstand_fra_ende"],
+        avstand_min=private_driveway_config["avstand_min"],
+        avstand_max=private_driveway_config["avstand_max"],
+        lengde_min=private_driveway_config["lengde_min"],
+        lengde_max=private_driveway_config["lengde_max"],
     )
 
     # Opprett GeoDataFrame
     all_roads = [main_riksveg, branch_riksveg, kommunalveg_a, kommunalveg_b] + avkjorsler
     gdf_riksveg = gpd.GeoDataFrame(all_roads, crs=crs)
     return gdf_riksveg
-
-
-# Vegbredder (halvparten brukes som buffer)
-VEGBREDDE = {
-    "Riksveg": 10.0,
-    "KommunalVeg": 5.0,
-    "PrivatAvkjørsel": 4.0,
-}
 
 
 def _unit_vector(vector):
@@ -715,7 +855,14 @@ def _add_t_junction_fillets(vegkanter, side_road, main_roads, main_half_width, s
             })
 
 
-def generate_vegkant(gdf_roads, crs="EPSG:25833", fillet_radius=4.0):
+def generate_vegkant(
+    gdf_roads,
+    crs="EPSG:25833",
+    fillet_radius=4.0,
+    road_widths=None,
+    t_junction_rules=None,
+    num_arc_points=8,
+):
     """
     Generer vegkanter ved å buffre senterlinjer med halv vegbredde
     og trekke ut venstre og høyre kantlinje.
@@ -734,13 +881,10 @@ def generate_vegkant(gdf_roads, crs="EPSG:25833", fillet_radius=4.0):
     """
     from shapely.ops import unary_union
 
+    road_widths = _merge_config(DEFAULT_ROAD_WIDTHS, road_widths)
+    t_kryss_regler = list(DEFAULT_T_JUNCTION_RULES if t_junction_rules is None else t_junction_rules)
+
     vegkanter = []
-    num_arc = 8
-    t_kryss_regler = [
-        {"hovedveg": "Riksveg", "stikkveg": "KommunalVeg"},
-        {"hovedveg": "KommunalVeg", "stikkveg": "KommunalVeg"},
-        {"hovedveg": "KommunalVeg", "stikkveg": "PrivatAvkjørsel"},
-    ]
     regler_per_stikkveg = {}
     for regel in t_kryss_regler:
         regler_per_stikkveg.setdefault(regel["stikkveg"], []).append(regel)
@@ -749,7 +893,7 @@ def generate_vegkant(gdf_roads, crs="EPSG:25833", fillet_radius=4.0):
     stikkvegtyper = {regel["stikkveg"] for regel in t_kryss_regler}
 
     for veg_type in sorted(road_types - stikkvegtyper):
-        bredde = VEGBREDDE.get(veg_type, 4.0)
+        bredde = road_widths.get(veg_type, 4.0)
         for _, road in gdf_roads[gdf_roads["veg_type"] == veg_type].iterrows():
             buffered = road.geometry.buffer(bredde / 2.0, cap_style=2)
             _append_boundary_lines(
@@ -766,7 +910,7 @@ def generate_vegkant(gdf_roads, crs="EPSG:25833", fillet_radius=4.0):
         if not regler_for_type or stikkveger.empty:
             continue
 
-        stikkbredde = VEGBREDDE.get(stikkveg_type, 4.0)
+        stikkbredde = road_widths.get(stikkveg_type, 4.0)
         stikk_half_width = stikkbredde / 2.0
 
         for stikk_idx, stikkveg in stikkveger.iterrows():
@@ -798,7 +942,7 @@ def generate_vegkant(gdf_roads, crs="EPSG:25833", fillet_radius=4.0):
                 continue
 
             hovedveg_union = unary_union([
-                match["main_road"].geometry.buffer(VEGBREDDE.get(match["main_type"], 4.0) / 2.0, cap_style=2)
+                match["main_road"].geometry.buffer(road_widths.get(match["main_type"], 4.0) / 2.0, cap_style=2)
                 for match in endpoint_matches
             ])
 
@@ -807,7 +951,7 @@ def generate_vegkant(gdf_roads, crs="EPSG:25833", fillet_radius=4.0):
             fillet_records = []
 
             for match in endpoint_matches:
-                hoved_half_width = VEGBREDDE.get(match["main_type"], 4.0) / 2.0
+                hoved_half_width = road_widths.get(match["main_type"], 4.0) / 2.0
                 _add_t_junction_fillets(
                     vegkanter,
                     stikkveg,
@@ -815,7 +959,7 @@ def generate_vegkant(gdf_roads, crs="EPSG:25833", fillet_radius=4.0):
                     hoved_half_width,
                     stikk_half_width,
                     fillet_radius,
-                    num_arc,
+                    num_arc_points,
                     stikkveg_type,
                     fillet_records=fillet_records,
                     endpoint_pairs=[(match["endpoint"], match["next_pt"])],
@@ -838,7 +982,7 @@ def generate_vegkant(gdf_roads, crs="EPSG:25833", fillet_radius=4.0):
 
     dekkede_typar = {regel["hovedveg"] for regel in t_kryss_regler} | stikkvegtyper
     for veg_type in sorted(road_types - dekkede_typar):
-        bredde = VEGBREDDE.get(veg_type, 4.0)
+        bredde = road_widths.get(veg_type, 4.0)
         for _, road in gdf_roads[gdf_roads["veg_type"] == veg_type].iterrows():
             buffered = road.geometry.buffer(bredde / 2.0, cap_style=2)
             _append_boundary_lines(

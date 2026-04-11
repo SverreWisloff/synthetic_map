@@ -90,6 +90,70 @@ WATER_CONFIG = {
 
 ROAD_CONFIG = {
     "generation_attempts": 8,
+    "main_road": {
+        "segment_length_min": 100.0,
+        "segment_length_max": 200.0,
+        "radius_min": 150.0,
+        "radius_max": 250.0,
+        "point_density": 0.2,
+        "max_attempts": 20,
+    },
+    "branch_road": {
+        "attach_fraction": (0.22, 0.30),
+        "end_offset": (18.0, 28.0),
+        "candidate_attempts": 50,
+        "segment_length_min": 100.0,
+        "segment_length_max": 200.0,
+        "radius_min": 150.0,
+        "radius_max": 250.0,
+        "point_density": 0.2,
+        "max_attempts": 20,
+    },
+    "municipal_road_a": {
+        "attach_fraction_main": (0.44, 0.56),
+        "end_fraction_x": (0.42, 0.58),
+        "end_offset": (18.0, 28.0),
+        "candidate_attempts": 50,
+        "segment_length_min": 50.0,
+        "segment_length_max": 100.0,
+        "radius_min": 70.0,
+        "radius_max": 100.0,
+        "point_density": 0.2,
+        "max_attempts": 20,
+    },
+    "municipal_road_b": {
+        "attach_fraction_municipal_a": (0.20, 0.32),
+        "attach_fraction_branch": (0.20, 0.32),
+        "candidate_attempts": 50,
+        "segment_length_min": 50.0,
+        "segment_length_max": 100.0,
+        "radius_min": 70.0,
+        "radius_max": 100.0,
+        "point_density": 0.2,
+        "max_attempts": 20,
+    },
+    "private_driveways": {
+        "avstand_fra_ende": 50.0,
+        "avstand_min": 70.0,
+        "avstand_max": 120.0,
+        "lengde_min": 10.0,
+        "lengde_max": 50.0,
+    },
+}
+
+ROAD_EDGE_CONFIG = {
+    "fillet_radius": 4.0,
+    "num_arc_points": 8,
+    "road_widths": {
+        "Riksveg": 10.0,
+        "KommunalVeg": 5.0,
+        "PrivatAvkjørsel": 4.0,
+    },
+    "t_junction_rules": [
+        {"hovedveg": "Riksveg", "stikkveg": "KommunalVeg"},
+        {"hovedveg": "KommunalVeg", "stikkveg": "KommunalVeg"},
+        {"hovedveg": "KommunalVeg", "stikkveg": "PrivatAvkjørsel"},
+    ],
 }
 
 
@@ -166,7 +230,15 @@ def generate_all_layers(layers=None):
         road_error = None
         for attempt in range(1, ROAD_CONFIG["generation_attempts"] + 1):
             try:
-                gdf_roads = generate_roads(terrain_data, crs=CRS)
+                gdf_roads = generate_roads(
+                    terrain_data,
+                    crs=CRS,
+                    main_road_config=ROAD_CONFIG["main_road"],
+                    branch_road_config=ROAD_CONFIG["branch_road"],
+                    municipal_road_a_config=ROAD_CONFIG["municipal_road_a"],
+                    municipal_road_b_config=ROAD_CONFIG["municipal_road_b"],
+                    private_driveway_config=ROAD_CONFIG["private_driveways"],
+                )
                 road_error = None
                 break
             except RuntimeError as error:
@@ -186,7 +258,14 @@ def generate_all_layers(layers=None):
         print(f"Skrevet til {OUTPUT_ROADS_GPKG}")
         print("  ✓ vegnett_riksveg")
 
-        gdf_vegkant = generate_vegkant(gdf_roads, crs=CRS)
+        gdf_vegkant = generate_vegkant(
+            gdf_roads,
+            crs=CRS,
+            fillet_radius=ROAD_EDGE_CONFIG["fillet_radius"],
+            road_widths=ROAD_EDGE_CONFIG["road_widths"],
+            t_junction_rules=ROAD_EDGE_CONFIG["t_junction_rules"],
+            num_arc_points=ROAD_EDGE_CONFIG["num_arc_points"],
+        )
         gdf_vegkant.to_file(OUTPUT_ROADS_GPKG, layer="vegkant", driver="GPKG")
         print("  ✓ vegkant")
 
