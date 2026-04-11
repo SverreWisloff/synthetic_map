@@ -4,7 +4,7 @@ Et Python-skript som genererer syntetiske kartlag for terreng, vann, vegnett, by
 
 ## Eksempel på resultat
 
-![Syntetisk kart med høydekurver, vegnett og bygninger](images/Skjermbilde%202026-04-11.png)
+![Syntetisk kart med høydekurver, vegnett, bygninger og AR5](images/Skjermbilde%202026-04-11.png)
 
 ## Arkitektur
 
