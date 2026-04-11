@@ -26,6 +26,8 @@ import argparse
 import os
 import sys
 
+from shapely.ops import unary_union
+
 from synthetic_ar5_module import generate_ar5
 from synthetic_bygning_module import generate_buildings
 from synthetic_hoydekurve_module import generate_terrain
@@ -167,7 +169,7 @@ AR5_CONFIG = {
     "road_widths": ROAD_EDGE_CONFIG["road_widths"],
     "building_buffer": 100.0,
     "built_merge_distance": 20.0,
-    "fulldyrka_max_slope": 4.0,
+    "fulldyrka_max_slope": 2.0,
     "fulldyrka_min_area": 20000.0,
     "flat_area_smooth_distance": 4.0,
 }
@@ -188,6 +190,34 @@ def resolve_layers_with_dependencies(layers=None):
         pending.extend(LAYER_DEPENDENCIES.get(layer, []))
 
     return [layer for layer in LAYER_ORDER if layer in resolved]
+
+
+def _remove_contours_inside_lakes(gdf_contours, gdf_lakes):
+    """Klipp bort deler av høydekurver som ligger inne i innsjøflater."""
+    if gdf_contours.empty or gdf_lakes.empty:
+        return gdf_contours
+
+    lake_union = unary_union([geometry for geometry in gdf_lakes.geometry if geometry is not None and not geometry.is_empty])
+    if lake_union.is_empty:
+        return gdf_contours
+
+    contour_records = []
+    for row in gdf_contours.itertuples(index=False):
+        clipped = row.geometry.difference(lake_union)
+        if clipped.is_empty:
+            continue
+        parts = getattr(clipped, "geoms", [clipped])
+        for part in parts:
+            if part.is_empty or part.geom_type != "LineString" or len(part.coords) < 2:
+                continue
+            contour_records.append({
+                "geometry": part,
+                "hoyde": float(row.hoyde),
+            })
+
+    if not contour_records:
+        return gdf_contours.iloc[0:0].copy()
+    return gdf_contours.__class__(contour_records, geometry="geometry", crs=gdf_contours.crs)
 
 
 def generate_all_layers(layers=None):
@@ -224,6 +254,12 @@ def generate_all_layers(layers=None):
     if "water" in layers:
         print("\nGenererer vannobjekter...")
         water_data = generate_water(terrain_data, **WATER_CONFIG)
+
+        terrain_data["gdf_contours"] = _remove_contours_inside_lakes(
+            terrain_data["gdf_contours"],
+            water_data["gdf_innsjokant"],
+        )
+        terrain_data["gdf_contours"].to_file(OUTPUT_TERRAIN_GPKG, layer="hoydekurver_1m", driver="GPKG")
 
         if os.path.exists(OUTPUT_WATER_GPKG):
             os.remove(OUTPUT_WATER_GPKG)

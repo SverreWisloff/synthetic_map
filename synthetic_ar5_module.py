@@ -195,26 +195,37 @@ def generate_ar5(
     area_polygon = box(*bbox)
     road_widths = {} if road_widths is None else dict(road_widths)
 
-    ferskvann_polygons = _merge_polygons(water_data["gdf_innsjokant"].geometry, clip_geometry=area_polygon, min_area=1.0)
-    myr_polygons = _merge_polygons(water_data["gdf_myrgrense"].geometry, clip_geometry=area_polygon, min_area=1.0)
     samferdsel_polygons = _build_transport_polygons(gdf_roads, road_widths, area_polygon)
     samferdsel_mask = _safe_unary_union(samferdsel_polygons)
 
-    # Samferdsel har høyeste prioritet og klipper vekk alle andre AR5-flater.
-    ferskvann_polygons = _subtract_from_polygons(ferskvann_polygons, samferdsel_mask, clip_geometry=area_polygon)
+    bebygd_polygons = _build_bebygd_polygons(gdf_buildings, area_polygon, building_buffer, built_merge_distance)
+    # Samferdsel har høyest prioritet. Bebygd skal bare reduseres mot Samferdsel,
+    # mens vann og myr senere reduseres mot Bebygd.
+    bebygd_polygons = _subtract_from_polygons(bebygd_polygons, samferdsel_mask, clip_geometry=area_polygon)
+    bebygd_polygons = _merge_polygons(bebygd_polygons, clip_geometry=area_polygon, min_area=1.0)
+    bebygd_mask = _safe_unary_union(bebygd_polygons)
+
+    ferskvann_polygons = []
+    for row in water_data["gdf_innsjokant"].itertuples(index=False):
+        geometry = row.geometry.intersection(area_polygon)
+        if geometry.is_empty:
+            continue
+        if samferdsel_mask is not None:
+            geometry = geometry.difference(samferdsel_mask)
+        if geometry.is_empty:
+            continue
+        # Hvis Bebygd treffer en ferskvannflate, fjernes hele ferskvannflaten fra AR5.
+        if bebygd_mask is not None and geometry.intersects(bebygd_mask):
+            continue
+        ferskvann_polygons.extend(part.buffer(0) for part in _iter_polygon_parts(geometry) if part.area >= 1.0)
     ferskvann_polygons = _merge_polygons(ferskvann_polygons, clip_geometry=area_polygon, min_area=1.0)
     ferskvann_mask = _safe_unary_union(ferskvann_polygons)
 
-    myr_mask_pre = _safe_unary_union([geometry for geometry in [samferdsel_mask, ferskvann_mask] if geometry is not None])
-    myr_polygons = _subtract_from_polygons(myr_polygons, myr_mask_pre, clip_geometry=area_polygon)
+    myr_polygons = _merge_polygons(water_data["gdf_myrgrense"].geometry, clip_geometry=area_polygon, min_area=1.0)
+    myr_blockers = _safe_unary_union([geometry for geometry in [samferdsel_mask, bebygd_mask, ferskvann_mask] if geometry is not None])
+    myr_polygons = _subtract_from_polygons(myr_polygons, myr_blockers, clip_geometry=area_polygon)
     myr_polygons = _merge_polygons(myr_polygons, clip_geometry=area_polygon, min_area=1.0)
     myr_mask = _safe_unary_union(myr_polygons)
-
-    bebygd_polygons = _build_bebygd_polygons(gdf_buildings, area_polygon, building_buffer, built_merge_distance)
-    bebygd_blockers = _safe_unary_union([geometry for geometry in [samferdsel_mask, ferskvann_mask, myr_mask] if geometry is not None])
-    bebygd_polygons = _subtract_from_polygons(bebygd_polygons, bebygd_blockers, clip_geometry=area_polygon)
-    bebygd_polygons = _merge_polygons(bebygd_polygons, clip_geometry=area_polygon, min_area=1.0)
-    bebygd_mask = _safe_unary_union(bebygd_polygons)
 
     occupied_without_fulldyrka = _safe_unary_union([
         geometry
