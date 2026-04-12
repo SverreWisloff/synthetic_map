@@ -84,7 +84,9 @@ Algoritme:
 - AR5 genereres sist og bruker allerede genererte vann-, veg- og bygningsflater som prioriterte kilder i en fast arealrekkefølge.
 - `Myr` hentes fra `Vann-myrgrense`, og `Ferskvann` hentes fra `Vann-innsjokant`.
 - `Samferdsel` bygges ved å buffre alle vegsenterlinjer med vegbredde fra vegparametrene. Alle samferdselsflater slås sammen, og andre AR5-flater klippes bort der de overlapper samferdsel.
-- `Bebygd` bygges ved å buffre bygninger 100 meter, slå sammen nærliggende flater og så klippe dem mot `Myr`, `Ferskvann` og `Samferdsel`.
+- `Bebygd` bygges ved å buffre bygninger 100 meter og slå sammen nærliggende flater. `Bebygd` reduseres mot `Samferdsel`.
+- `Ferskvann` hentes fra vannlaget, reduseres mot `Samferdsel`, og ferskvannflater som overlapper `Bebygd` fjernes.
+- `Myr` hentes fra vannlaget og reduseres mot `Samferdsel`, `Bebygd` og `Ferskvann`.
 - `Fulldyrka jord` hentes fra relativt flate restarealer i terrengmodellen og beholdes bare for flater større enn 20 000 m2.
 - `Barskog` fyller resten av området, slik at AR5 blir heldekkende uten reelle hull eller overlapp.
 - Dersom AR5 endrer geometri for `Myr` eller `Ferskvann`, skrives disse flatene tilbake til vannlaget slik at `synthetic_vann.gpkg` og `synthetic_ar5.gpkg` er konsistente.

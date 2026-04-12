@@ -1,5 +1,7 @@
 # Samlet Instruksjon (Retrospektivt)
 
+_Dette dokumentet er en samling formuleringer av oppgaven som skal løses_
+
 Lag et Python-program som genererer et komplett syntetisk kartdatasett for et avgrenset område i Norge (UTM), med realistisk intern sammenheng mellom terreng, vann, vegnett, bygninger og AR5-arealtyper.
 
 ## Mål
@@ -25,14 +27,12 @@ Bygg løsningen modulært med én orkestrator og temamoduler:
 - `synthetic_bygning_module.py`: bygningsflater
 - `synthetic_ar5_module.py`: heldekkende AR5-flater med prioritet og clipping
 
-## Funksjonelle krav
-
-1. Terreng
+## 1. Terreng
 - Generer hierarkiske høydepunkter (flere detaljnivåer).
 - Trianguler punktene til TIN.
 - Generer høydekurver med 1 m ekvidistanse.
 
-2. Vann
+## 2. Vann
 - Finn innsjøkandidater fra lukkede høydekurver i forsenkninger.
 - Generer innløps-/utløpsbekker basert på terrengdrenering.
 - Generer myr fra flate terrengområder, med sammenslåing/splitting etter arealkrav.
@@ -45,13 +45,13 @@ I Vann vil jeg ha generert følgende objekttyper:
 - ElvBekk: Senterlinje, kurve
 - MyrGrense: Lukket polygon
 
-Innsjøkant:
+### Innsjøkant:
 Områder som er en grop, eller "lukket" lavpunkt, er kandidat for innsjø.
 Objekttypen Innsjøkant er et lukket polygon.
 Høydekurver som er lukket, og som har 1, 2 eller 3 lukkede høydekurver inni seg med lavere høyde er kandidat for innsjø. La da Innsjøkant følge denne høydekurven.
 Store Innsjøkant-polygoner, reduseres ved å bruke en av de høydekurvene som ligger inni som Innsjøkant. 
 
-ElvBekk:
+### ElvBekk:
 Jeg har en syntetisk terrengmodell. Både TIN og høydekurver. Ønsker å generere vann og bekk. Ikke raster, men vektor. Hvordan? Hvilke algoritmer? Har hørt om ‘TIN-based Flow Accumulation’.
 
 Inn til hver sjø rener det 0,1 eller 2 bekker. De er plassert oppover, men ikke langs rygger, men helst i søkk. 
@@ -59,29 +59,45 @@ Lengden på bekk inn til sjø er mellom 100m og 500m
 Ut fra hvert vann kan det renne 1 bekk. Ettersom innsjøen er i grop, må det noen ganger klatres opp en høydekurve eller to før en finner en vei nedover. Denne skal følge avrenning, altså fallretningene fra gradienten på TIN-trekanten. 
 Lengden på bekk ut av en sjø er mellom 300m og 700m 
 
-MyrGrense:
+### MyrGrense:
 Noen av de aller flateste områdene defineres som myr
 Noen ganger kommer to myr-flater rett ved siden av hverandre. Slå disse sammen til en flate
-
 
 Organiser alle parametre samlet i hoved-skriptet. 
 Dokumenter alle parametre i readme
 
+## 3. Vegnett
 
-3. Vegnett
-- Generer 2 riksveger + 2 kommunale veger med jevn kurvatur.
-- Legg private avkjørsler langs kommunale veger med avstandsregler.
-- Unngå uønskede kryssinger; bruk retry-strategi ved konflikt.
-- Generer vegkant fra vegbredder per vegtype.
+### Nivåer på veger:
+Riksveg: Mellom tettsteder. Vegbredde=10 m. Bueradius=[150, 250] m.
+Kommunalveg: Fortetting i tettsted. Vegbredde=5 m. Bueradius=[70, 100] m. 
+Privat veg (avkjørsel): Veg inn til eiendommer. Vegbredde=4 m. Genereres som rett 2-punktslinje. Lengde=[10, 50] m.
+Segmentlengde og bueradius styres per vegtype i konfigurasjonen (ikke nødvendigvis like).
 
-4. Bygninger
+### Veg konstrueres slik:
+Startpunkt og endepunkt.
+Vegen bygges iterativt fra start mot slutt som en polyline. 
+Hver iterasjon 
+ - beregnes retningen fra nåværende punkt mot målet.
+ - enten et buesegment med tilfeldig radius og tilfeldig segmentlengde, eller et rett-segment med tilfeldig lengde. Buesegment og rett-segment har minimum og maksimumverdi.
+ - hvis buesegmentet: sirkelbue som er tangent til forrige retning. Radiusens fortegn bestemmes av om vegen må dreie mot høyre eller venstre for å nærme seg målretningen/endepunktet. 
+ - hvis rett-segment: Sjekk om antall påfølgende rettstrekk er overskredet, da velges buesegment
+ - Når vegen er nær nok endepunktet, legges siste del inn som en rett interpolert avslutning mot målet.
+ Til slutt valideres kandidatlinjen. Hvis linjen krysser seg selv, eller er nærmere en annen veg enn 15m, forkastes den og algoritmen prøver på nytt opptil et gitt antall forsøk.
+
+### Private avkjørsler:
+Parametre: MinLengdeFraKryss=50 m. AvstandMellomPrivateAvkjørsler=[70, 120] m.
+Parametre: MinLengde=10 m, Makslengde=50 m for private avkjørsler.
+Retningen er normalvektor 90 grader på tangent til veien den går ut fra. 
+
+## 4. Bygninger
 - Plasser bygninger i grupper ved private avkjørsler.
 - Bruk minst to bygningstyper (rektangulær, L-formet).
 - Filtrer/sanér bygg som kolliderer med veg eller ligger for nær hovedveg.
 
 Generer Bygninger i eget kartlag: synthetic_bygning.gpkg
 To typer Bygninger: Rektangulært, og L-formet. 
-Parametre for husstørrelse er BygningSizeMin=6 meter, BygningSizeMax=30 meter. AvstandMellomBygningGruppe=8 meter
+Parametre for husstørrelse er BygningSizeMin=6 meter, BygningSizeMax=25 meter. AvstandMellomBygningGruppe=5 meter.
 Retningen på en bygning er tilfeldig.
 Lag Bygningsgrupper på 2 eller 3 bygninger. Avstandene mellom bygningene innad i en Bygningsgruppe er AvstandMellomBygningGruppe.
 For hver PrivatAvkjørsel genereres en Bygningsgruppe.
@@ -89,13 +105,13 @@ Dersom to bygninger overlapper hverandre, slettes den minste Bygningen
 Dersom en bygninger overlapper med veg, slettes Bygningen
 Bygninger som er nærmere enn 8 meter fra RiksVeg eller KommunalVeg flyttes tilsvarende bort fra vegen
 
-Avstanden fra veg til Bygningsgruppe er 10 meter
-Avstanden fra Bygningsgruppe til neste Bygningsgruppe er 100 meter
-Avstanden fra Bygningsgruppe til nærmeste veg-ende er 200 meter
+Avstanden fra veg til Bygningsgruppe er 20 meter (langs avkjørsel-retning).
+Avstanden fra Bygningsgruppe til neste Bygningsgruppe styres indirekte av avstand mellom private avkjørsler: [70, 120] meter.
+Avstanden fra Bygningsgruppe til nærmeste veg-ende styres indirekte av MinLengdeFraKryss=50 meter.
 Generer Bygningsgruppe langs en side av alle Kommunale veger
 
 
-5. AR5 (heldekkende)
+## 5. AR5 (heldekkende)
 - Generer heldekkende AR5-klasser: `Fulldyrka jord`, `Barskog`, `Bebygd`, `Samferdsel`, `Myr`, `Ferskvann`.
 - Bruk fast prioritet i overlapping:
   1. `Samferdsel`
@@ -118,34 +134,34 @@ I AR5 vil jeg ha generert følgende objekttyper(AR-flater):
 
 Alle objekttypene er lukket polygon.
 
-#### Myr: 
-Hant alle Vann-myrgrense polygoner til AR5-Myr 
+### Myr: 
+Hent alle Vann-myrgrense-polygoner til AR5-Myr 
 
-#### Ferskvann: 
+### Ferskvann: 
 Hant alle Vann-Innsjøkant polygoner til AR5-Ferskvann 
 
-#### Samferdsel: 
+### Samferdsel: 
 Lag buffer rundt alle senterlinje-veg med vegbredden fra parametrene. Disse flatene lagres som Samferdsel i AR5. 
 Alle arealer for veger slås sammen til Samferdsel.
 Om det er andre AR-Flater som overlappes med Samferdsel, skal Samferdsel bli, og de andre AR5-flatene klippes bort.
 
-#### Bebygd: 
+### Bebygd: 
 Rundt alle bygg lages buffer på 100m. 
 Slå bufferene sammen. 
 Nærliggende Bebygd-flater slås sammen.
 Dersom Bebygd overlapper med Samferdsel, reduseres Bebygd tilsvarende.
 Dersom Bebygd overlapper med Myr, reduseres Myr tilsvarende.
-Dersom Bebygd overlapper med Ferskvann, fjærnes hele Ferskvann.
+Dersom Bebygd overlapper med Ferskvann, fjernes hele Ferskvann-flaten.
 
-#### Fulldyrka jord:
+### Fulldyrka jord:
 Av det gjenværende arealet, finn noen relativt flate områder > 20.000m2. Disse lagres i AR5 som FulldyrkaJord
 
-#### Barskog: 
+### Barskog: 
 Resten av arealene er lagres som Barskog
 
 Like AF-flater som ligger inntil hverandre slås sammen.
 Kontroll: Ingen overlappende AR-flater. 
-Kontroll: Hele området degget av AR-flater
+Kontroll: Hele området dekkes av AR-flater
 
 Noen AR-flater er hentet og modifiserte. Oppdater disse i andre kartbaser:
 Dersom ulik polygon Vann-myrgrense og AR5-Myr, erstattes Vann-myrgrense av AR5-Myr
@@ -153,7 +169,6 @@ Dersom ulik polygon Vann-Innsjøkant og AR5-Ferskvann, erstattes Vann-Innsjøkan
 
 Til slutt litt kosmetikk i hovedskriptet:
 Slett høydekurver som er innenfor Innsjøkant.
-
 
 ## Datastruktur og output
 
@@ -197,6 +212,13 @@ Samle sentrale parametre i `synthetic_map.py`:
 - `AR5_CONFIG`
 
 Parametre skal være enkle å justere uten å endre algoritmekode.
+
+## Instruksjoner
+Commit-kommentarer er på norsk.
+All kode er på Engelsk.
+
+Se også [.github/copilot-instructions.md](.github/copilot-instructions.md) for utfyllende regler om arkitektur, konfigurasjon, geometrikvalitet og git-rutiner.
+
 
 ## Validering før levering
 
