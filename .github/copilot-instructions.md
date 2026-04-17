@@ -3,6 +3,9 @@
 Dersom du ser at det er naturlig å utvide instructions, gi meg
 en beskjed om forslag, og hvorfor.
 
+## Oppgavebeskrivelse
+Se [Oppgavebeskrivelse.md](../Oppgavebeskrivelse.md) for hva som skal genereres, og i hvilken rekkefølge. Det er viktig at denne fila oppdateres når det gjøres endringer i hva som skal genereres, beskrivelse av algoritmene for generering av kartobjektene, eller i avhengighetene mellom lagene.
+
 ## Arkitektur
 
 Prosjektet genererer syntetiske GIS-kartlag i GeoPackage-format.

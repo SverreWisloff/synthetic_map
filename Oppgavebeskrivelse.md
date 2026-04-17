@@ -28,22 +28,44 @@ Bygg løsningen modulært med én orkestrator og temamoduler:
 - `synthetic_ar5_module.py`: heldekkende AR5-flater med prioritet og clipping
 
 ## 1. Terreng
-- Generer hierarkiske høydepunkter (flere detaljnivåer).
-- Trianguler punktene til TIN.
-- Generer høydekurver med 1 m ekvidistanse.
+Målet er å generere objekttypen Høydekurve
+
+1) primær-TIN-punkter:
+4 hjørnepunkter med tilfeldig høyde.
+Antall primærpunkter med tilfeldig høyde: 15
+Bygg TIN
+
+2) sekundærpunkter-TIN-punkter:
+For hver trekant genereres nye punkter inne i trekanten.
+AntallPunktPrTrekant=5
+Høyden på nye punkt er TIN-interpolert høyde for x,y + tilfeldig verdi med MaxAvvikFraTIN=3.0
+Bygg TIN
+
+3) tertiær-TIN-punkter:
+AntallPunktPrTrekant=3
+MaxAvvikFraTIN=1.0
+Bygg TIN
+
+4) kvaternær-TIN-punkter:
+AntallPunktPrTrekant=3
+MaxAvvikFraTIN=0.4
+Bygg TIN
+
+5) kvintær-TIN-punkter:
+AntallPunktPrTrekant=3
+MaxAvvikFraTIN=0.1
+Bygg TIN
+
+Kurvegenerering:
+Lag høydekurver med ekvidistanse=1m
+Lagre høyden som egenskap på hver enkelt kurve
+Fjern kurver kortere enn = 50 m
+Glatt kurver.
+
 
 ## 2. Vann
-- Finn innsjøkandidater fra lukkede høydekurver i forsenkninger.
-- Generer innløps-/utløpsbekker basert på terrengdrenering.
-- Generer myr fra flate terrengområder, med sammenslåing/splitting etter arealkrav.
-- Sikre at vannlag klippes innenfor BBOX og er topologisk gyldig.
+Bruk TIN og høydekurver fra Terreng for å lage objekttypene Innsjøkant, MyrGrense og ElvBekk
 
-Ønsker å lage et geopackage for Vann.
-Denne skal genereres etter Terreng.
-I Vann vil jeg ha generert følgende objekttyper:
-- Innsjøkant: Lukket polygon
-- ElvBekk: Senterlinje, kurve
-- MyrGrense: Lukket polygon
 
 ### Innsjøkant:
 Områder som er en grop, eller "lukket" lavpunkt, er kandidat for innsjø.
@@ -67,6 +89,7 @@ Organiser alle parametre samlet i hoved-skriptet.
 Dokumenter alle parametre i readme
 
 ## 3. Vegnett
+Målet er å generere objekttypen SenterlinjeVeg, og Vegkant
 
 ### Nivåer på veger:
 Riksveg: Mellom tettsteder. Vegbredde=10 m. Bueradius=[150, 250] m.
@@ -91,6 +114,7 @@ Parametre: MinLengde=10 m, Makslengde=50 m for private avkjørsler.
 Retningen er normalvektor 90 grader på tangent til veien den går ut fra. 
 
 ## 4. Bygninger
+Målet er å generere objekttypen Takkant.
 - Plasser bygninger i grupper ved private avkjørsler.
 - Bruk minst to bygningstyper (rektangulær, L-formet).
 - Filtrer/sanér bygg som kolliderer med veg eller ligger for nær hovedveg.
@@ -112,6 +136,7 @@ Generer Bygningsgruppe langs en side av alle Kommunale veger
 
 
 ## 5. AR5 (heldekkende)
+Målet er å generere objekttypen Arealressursflate
 - Generer heldekkende AR5-klasser: `Fulldyrka jord`, `Barskog`, `Bebygd`, `Samferdsel`, `Myr`, `Ferskvann`.
 - Bruk fast prioritet i overlapping:
   1. `Samferdsel`
@@ -124,7 +149,7 @@ AR5 er et heldekkende arealressursdatasett som beskriver alt areal.
 
 Ønsker å lage et geopackage for AR5.
 Denne skal genereres sist av alle kartlag.
-I AR5 vil jeg ha generert følgende objekttyper(AR-flater):
+I AR5 vil jeg ha generert følgende arealtype-klassene (AR-flater):
 -Fulldyrka jord
 -Barskog
 -Bebygd
@@ -132,7 +157,7 @@ I AR5 vil jeg ha generert følgende objekttyper(AR-flater):
 -Myr
 -Ferskvann
 
-Alle objekttypene er lukket polygon.
+Alle Arealressursflater er lukket polygon.
 
 ### Myr: 
 Hent alle Vann-myrgrense-polygoner til AR5-Myr 
@@ -236,3 +261,83 @@ Lever en ryddig repository-struktur med:
 - oppdatert README
 - `requirements.txt`
 - `.gitignore` som ignorerer miljø- og låsefiler
+
+# 💡 Ideer til neste versjon
+
+## Overordnet plan for generering av syntetisk kart:
+1) 🗺️ Lag først et Oversiktskart, N50. Dette er en slags disposisjon for overordnet kart.
+    - a) Lag Sjøkant. Denne går langs kanten på området, og dekker minimul en side, men kan også gå rundt hele som en øy
+    - b) Lag Tettsteder, jo større område - jo flere tettsteder
+    - c) Lag Fylkesveger (senterlinje) mellom tettsteder
+    - d) Legg på høyder på Tettsteder og Fylkesveger, Lag åser mellom riksveger, Lag noen flate områder også
+2) 🚗 Lag Veger
+3) ⛰️ Lag Høydekurver
+4) 💧 Lag Vann 
+5) 🏠 Lag Bygninger
+
+## De ulike kartlagene
+
+1) N50
+- Kartfil: N50.gpkg
+- Modulskript: N50.py
+- Objekttyper: 
+  - N50-Kystkontur(2D-kurve)  
+  - N50-StedsnavnTekst(3D-Punkt, Egenskap: Navneobjekttype=By)
+  - N50-VegSenterlinje(3D-linje)
+  - N50-Terrengpunkt(3D-Punkt)
+  - N50-Hoydekurve(2D-kurve)
+
+2) Veg
+- Kartfil: FKB-Veg.gpkg
+- Modulskript: Veg.py
+- Objekttyper: 
+    - FKB-Vegdekkekant(3D-kurve)
+    - FKB-VegSenterlinje(3D-kurve)
+
+3) Høydekurve
+- Kartfil: FKB-Hoydekurve.gpkg
+- Modulskript: Hoydekurve.py
+- Objekttyper: 
+  - TIN-Punkt(3D-Punkt)
+  - TIN-Trekant
+  - FKB-Hoydekurve(2D-kurve, egenskap:Høyde)
+
+4) Vann
+- Kartfil: FKB-Vann.gpkg
+- Modulskript: Vann.py
+- Objekttyper: 
+  - FKB-Vann
+
+5) Bygning
+- Kartfil: FKB-Bygning.gpkg
+- Modulskript: Bygning.py
+- Objekttyper: 
+  - FKB-Takkant
+
+## Algoritmer for generering av objekttyper
+
+### N50-Kystkontur (2D-kurve) 
+Kystkontur tilfeldig 1, 2, 3 eller fire kanter.
+For de kantene som skal ha kystkontur, lag kystkontur som en rett linje 300m fra ytterkanten av bbox.
+Linje deles i to, og midtpunktet forskyves fra linjen med en tilfeldig verdi < Linjeavtande/3. Prosessen gjentas rekursivt for de nye linjesegmentene for å skape ujevnheter, inntil linjeavstand er <1m. Sjekk for at linjen ikke krysser bbox eller kystkontur.
+
+### N50-StedsnavnTekst (3D-Punkt)
+N50-StedsnavnTekst er objekttypen som beskriver tettsted. Dette er en 3D-punkt. 
+Området skal ha minst to StedsnavnTekst, jo større område - jo flere tettsteder.
+Minst ett kyst-tettsted skal ligge 200m ved kysten, med høyde=15m.
+Minst ett innlands-tettsted lengst fra kysten, med høyde=avstand til kyst / 20.
+Det skal være tettsteder ved kysten med tilfeldig avstand mellom 2km og 6km. Tettstedene ved kysten har høyde=15m
+Generer flere innlands-tettsteder slik at avstanden mellom tettsteder har avstand mellom 2km og 6km.  Høyde=avstand til kyst / 20.
+
+### N50-VegSenterlinje (3D-linje)
+Lag rette linjer som N50-VegSenterlinje mellom tettstedene etter TIN-prinsippet.
+Generer tilfeldig horisontalkurvatur på veiene. Bruk "Veggenereringsalgoritmen" med parametre for Riksveg.
+Veger skal ikke krysses, og ikke krysse kystkontur.
+Legg på høyden på alle punkter i VegSenterlinje: Start og slutt på alle veger er på et tettsted, hent høyden fra disse punktene. Senterlinje deles i to, og midtpunktet er snitt av de to endepunkthøydene, pluss/minus et tilfeldig tall < Linjeavtande/40. Prosessen gjentas rekursivt inntill alle punkter i N50-VegSenterlinje har høyde.
+
+### N50-Terrengpunkt (3D-Punkt)
+Tettsteder ligger i daler. Nå skal det genereres punkter for fjell.
+
+### N50-Hoydekurve (2D-kurve)
+Generer TIN.
+Generer Hoydekurver med ekvidistande=20m basert på TIN.
