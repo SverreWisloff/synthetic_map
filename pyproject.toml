@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "syntetisk-kart"
+version = "0.1.0"
+description = "Syntetisk generering av GIS-kartlag for norske testområder"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "numpy>=1.21.0",
+    "geopandas>=0.9.0",
+    "scipy>=1.7.0",
+    "rasterio>=1.2.0",
+    "matplotlib>=3.4.0",
+    "shapely>=1.7.0",
+]
+
+[project.scripts]
+syntetisk-kart = "synthetic_map:main"
+
+[tool.setuptools]
+py-modules = [
+    "synthetic_map",
+    "synthetic_ar5_module",
+    "synthetic_bygning_module",
+    "synthetic_hoydekurve_module",
+    "synthetic_vann_module",
+    "synthetic_vegnett_module",
+]

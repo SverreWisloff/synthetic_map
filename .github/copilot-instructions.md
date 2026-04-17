@@ -1,4 +1,4 @@
-# Syntetisk kartgenerator – prosjektregler
+# Syntetisk-kart – prosjektregler
 
 Dersom du ser at det er naturlig å utvide instructions, gi meg
 en beskjed om forslag, og hvorfor.
@@ -24,9 +24,10 @@ Kjeden er: `terrain` → `water` → `roads` → `buildings` → `ar5`.
 
 ## Navngiving
 
-- Funksjons- og variabelnavn er på norsk eller nøytral-engelsk (bruk prosjektets eksisterende stil).
+- Nye funksjonsnavn, variabelnavn, kommentarer og docstrings skal skrives på norsk der det er praktisk mulig.
 - GeoDataFrame-nøkler følger mønsteret `gdf_<lagnavn>`, f.eks. `gdf_innsjokant`, `gdf_contours`.
 - Konfig-dicts navngis `<tema>_CONFIG` i `synthetic_map.py`.
+- README, oppgavebeskrivelse og commit-meldinger skal alltid være på norsk.
 
 ## Parameterhåndtering
 

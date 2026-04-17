@@ -1,6 +1,6 @@
-# Samlet Instruksjon (Retrospektivt)
+# Oppgavebeskrivelse for Syntetisk-kart
 
-_Dette dokumentet er en samling formuleringer av oppgaven som skal løses_
+_Dette dokumentet beskriver oppgaven og kravene til prosjektet Syntetisk-kart._
 
 Lag et Python-program som genererer et komplett syntetisk kartdatasett for et avgrenset område i Norge (UTM), med realistisk intern sammenheng mellom terreng, vann, vegnett, bygninger og AR5-arealtyper.
 
@@ -240,7 +240,7 @@ Parametre skal være enkle å justere uten å endre algoritmekode.
 
 ## Instruksjoner
 Commit-kommentarer er på norsk.
-All kode er på Engelsk.
+All ny kode, alle kommentarer og all dokumentasjon skal være på norsk.
 
 Se også [.github/copilot-instructions.md](.github/copilot-instructions.md) for utfyllende regler om arkitektur, konfigurasjon, geometrikvalitet og git-rutiner.
 

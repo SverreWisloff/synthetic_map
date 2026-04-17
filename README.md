@@ -1,6 +1,6 @@
-# Syntetisk Kartgenerering
+# Syntetisk-kart
 
-Et Python-skript som genererer syntetiske kartlag for terreng, vann, vegnett, bygninger og AR5 til GeoPackage-format.
+Et GitHub-klargjort Python-prosjekt som genererer syntetiske kartlag for terreng, vann, vegnett, bygninger og AR5 til GeoPackage-format. Dokumentasjon og prosjektbeskrivelser er skrevet på norsk.
 
 ## Eksempel på resultat
 
@@ -106,10 +106,10 @@ Modul: `synthetic_map.py`
 
 ## Installasjon
 
-1. Klon dette repositoriet:
+1. Hent prosjektet fra GitHub:
 ```bash
-git clone https://github.com/SverreWisloff/synthetic_map.git
-cd synthetic_map
+git clone <din-github-url>/Syntetisk-kart.git
+cd Syntetisk-kart
 ```
 
 2. Lag et virtuelt miljø:
